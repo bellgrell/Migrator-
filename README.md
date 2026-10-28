@@ -1,64 +1,68 @@
-# mini-database
+# mini-migrator
 
-一个用 C++17 从零实现的 **嵌入式 KV 存储引擎**（学习 / 作品项目）。
+面向国产数据库的**异构数据迁移工具**（学习 / 作品项目）。
 
-定位：**库**，不是数据库服务器。对标 LevelDB / RocksDB。
+- 源端：MySQL / PostgreSQL
+- 目标端：openGauss / DM8
+
+> 项目定位：**数据搬运 + 类型映射 + 校验**，不是数据库引擎。
+> 主要参考：pgloader（类型映射）、DataX/Addax（插件化）、Debezium（CDC）。
 
 ## 路线
 
-    M1  LSM 核心      memtable / sstable / compaction / bloom
-    M2  WAL           日志格式 / append / replay / truncate / fsync
-    M3  正确性测试    引擎一致性 + kill -9 崩溃测试
-    M4  CDC           tail WAL -> 变更事件流 -> 订阅
-    M5  压测          YCSB 式 + 与 LevelDB 对比
-    M6  B+Tree 引擎   第二引擎（前提：M1-M5 全通过）
-
-详见 docs/plan.md。
+| 阶段 | 内容 |
+|---|---|
+| M0 地基 | 配置 / 日志 / 通用类型 / 重试 |
+| M1 连接层 | 连接池 + 各数据库连接封装 |
+| M2 源端 | ISource 抽象 + MySQL 实现 |
+| M3 目标端 | ITarget 抽象 + openGauss 实现 |
+| **M4 类型映射** | ⭐ 两级映射 + DDL 生成 |
+| **M5 全量搬运** | ⭐ 游标读 + 批量写 + 事务 |
+| M6 校验 | 行数 / checksum / 抽样比对 |
+| M7 增量 CDC | binlog 解析 + 位点衔接 |
+| M8 工程化 | CLI / 重试 / 死信队列 |
+| M9 DM8 | 可选，留接口 |
 
 ## 目录
 
-    include/minidb/        公共接口（对外）
-    src/storage/           存储引擎
-      lsm_engine/          LSM 引擎（第一阶段）
-      bplus_engine/        B+Tree 引擎（第二阶段，占位）
-    src/wal/               预写日志
-    src/cdc/               变更数据捕获
-    tests/                 单元测试 + 崩溃测试
-    bench/                 压测
-    server/                （暂缓）Redis 协议 / 网络层
-    sink/mysql_pool/       （暂缓）CDC 下游连接池
-    docs/                  设计文档
+    include/migrator/     公共接口（status / slice / options / source / target）
+    src/common/           基础设施（日志、重试）
+    src/config/           配置解析 + 类型映射
+    src/db/mysql/         MySQL（含连接池）
+    src/db/postgres/      PostgreSQL
+    src/db/opengauss/     openGauss（继承 postgres）
+    src/db/dm8/           DM8（占位）
+    src/schema/           Schema 抽取 + DDL 生成
+    src/data/             全量搬运（copier / batch_writer）
+    src/cdc/              增量捕获
+    src/verify/           校验
+    src/util/             编码 / 校验和 / 状态实现
+    config/               YAML 配置（类型映射表放这里）
+    tests/ bench/ docs/
+    archive/              上一版（LSM 存储引擎）的代码，保留但不参与构建
 
-## 核心契约
+## 两个核心设计
 
-所有引擎实现同一个接口 include/minidb/storage_engine.h：
+### 1. 两级类型映射
 
-    Open / Close / Put / Get / Delete / Scan / Name / Stats
+    第一级：全局类型映射       mysql_type -> target_type
+    第二级：列级覆盖           某表某列的特殊处理
 
-上层（CDC / tests / bench）只依赖该接口，不依赖具体引擎。
-这样新增引擎时上层零改动。
+参考 sqlines 的 sqlines_dtmap.txt / sqlines_cmap.txt。
+映射表是**配置文件**，改类型不用重新编译。
+
+### 2. 读一批、写一批
+
+    OpenCursor -> 循环 FetchBatch(N) -> WriteBatch(N) -> 每 M 批 Commit -> CloseCursor
+
+不要读一行写一行。
 
 ## 构建
 
-    make            # 生成 build/libminidb.a
-    make test       # 编译并运行 tests/
-    make clean
+    make
 
-## WAL 与 CDC 的关系
+## 环境
 
-- WAL  = 给引擎自己用的，为了崩溃恢复（内部）
-- CDC  = 给外部系统订阅的，变更事件流（对外）
-- CDC 最省事的实现：tail WAL（一份日志，两种用途，参考 MySQL binlog）
-
-
-//学习笔记：
-B树因为可能存在的SMO操作（分裂合并操作）导致必须在可能发生该操作的节点加锁，从而影响到他本身的并发性能
-
-然后对于这个锁，这里存在两种锁一种是lock逻辑上的锁，主要是面对用户的事物，另一种是latch这个是线程锁，主要是数据加锁（比如我要修改内存中的一块数据，那么为了防止在我修改数据时，这块数据被其他人访问，那么我给他上个latch锁，后面我修改完数据了，但是还没有提交。这时候需要添加一个lock来锁住这被我修改的数据块，当我提交之后lock解除就可以正常访问）
-
-B+树，在非叶子节点仅保留指针，数据都存放在叶子节点（减少了，数的高度，并且区分开了索引段和数据段）
-LSM树，就是分层结构一层一层向下追加写入数据，当内存满了之后，会开始层级合并去重整理后都放在下层（Compaction，同时这也是一种标准的SMO操作，会占用大量资源，还可能伴随着缓冲丢失，写停顿从而影响到并发性能，所以LSM树最大的问题就是提高Compaction的性能
-
-BLOOM过滤器误报率跟哈希数量之间的取舍是提高LSM树的关键点之一
-
-Compaction还会造成Cache丢失，可以通过在结束后主动更新Cache活着机器学习的方法避免
+- MySQL / PostgreSQL：Docker 一条命令
+- openGauss：用 PostgreSQL 代替（同源，90% 语法相通）
+- DM8：商业版，暂留接口和映射表

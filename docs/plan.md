@@ -1,77 +1,100 @@
-# mini-database 开发计划
+# mini-migrator 开发计划
 
-> 项目定位：**嵌入式 KV 存储引擎库**（对标 LevelDB / RocksDB），不是数据库服务器。
-> 对外产出一个可链接的库；核心是 LSM + WAL + CDC；B+Tree 作为第二阶段引擎。
+## M0 · 地基（1 周）
 
-## 0. 明确不做（Out of Scope）
+| 文件 | 位置 | 用途 |
+|---|---|---|
+| status.h / .cpp | include/migrator, src/util | 错误码（已有，待修） |
+| slice.h | include/migrator | 字节视图（已有，待修） |
+| options.h | include/migrator | 配置结构（已有，待改） |
+| types.h / .cpp | include/migrator, src/common | Value / Row / ColumnDef / TableSchema |
+| config.h / .cpp | src/config | 读 YAML |
+| logger.h / .cpp | src/common | 日志 + 进度 |
+| retry.h / .cpp | src/common | 重试 |
 
-- 网络层（net / RESP / commands）→ 不做服务器
-- MySQL 连接池（backend/）→ 除非 CDC 需要把变更同步到 MySQL
-- 复制/集群/鉴权 → 后期再说
+验收：能读配置文件、打印日志。
 
-## 1. 架构契约（第一步就要定死）
+## M1 · 连接层（1 周）
 
-storage/storage_engine.h —— 所有引擎必须实现同一接口：
+| 文件 | 位置 |
+|---|---|
+| pool.h / .cpp | src/db（改造已有连接池） |
+| connector.h / .cpp | src/db |
+| mysql_conn.h / .cpp | src/db/mysql |
+| pg_conn.h / .cpp | src/db/postgres |
 
-    put / get / del / scan / WriteBatch / snapshot
+验收：MySQL 和 PostgreSQL 都能 SELECT 1。
 
-规则：上层（CDC、tests、bench）**只依赖这个接口**，绝不依赖具体引擎。
-这是“给 B+Tree 留空间”的唯一实质做法。
+## M2 · 源端（1 周）
 
-## 2. 里程碑
+| 文件 | 位置 |
+|---|---|
+| source.h | include/migrator |
+| mysql_source.h / .cpp | src/db/mysql |
 
-### M1 · LSM 核心
-目标：内存 + 磁盘的 LSM，能存能读
-文件：storage/lsm_engine/{memtable, sstable, compaction, bloom}.{h,cpp}
-要点：
-- memtable 用 SkipList
-- SSTable 有序落盘 + 索引块
-- Compaction（先 size-tiered，再考虑 level-tiered）
-- Bloom Filter 降低读放大
-验收：单线程 put/get/del 正确；落盘后重启能读回。
+ISource 六个方法：Connect / ListTables / ReadSchema / OpenCursor / FetchBatch / CloseCursor。
 
-### M2 · WAL + 崩溃恢复
-目标：写入先落 WAL，崩溃不丢数据
-文件：wal/{wal, replay, lsn}.{h,cpp}
-验收（硬指标）：
-- kill -9 随机 100+ 次，已确认的写操作零丢失
-- 日志能正确重放与截断
+验收：能列出表、能分批读出 100 万行。
 
-### M3 · 正确性测试
-文件：tests/
-- engine_consistency_test：同一批用例跑引擎，结果必须一致
-- crash_test：反复 kill -9 后校验数据
-验收：全部通过，且可重复运行。
+## M3 · 目标端（1 周）
 
-### M4 · CDC
-目标：捕获 put/del 变更，提供订阅 / 拉取接口
-文件：cdc/{change_event, subscription, offset}.{h,cpp}
-验收：程序能订阅变更；顺序正确、不丢不重（至少 at-least-once）。
+| 文件 | 位置 |
+|---|---|
+| target.h | include/migrator |
+| pg_target.h / .cpp | src/db/postgres |
+| opengauss_target.h / .cpp | src/db/opengauss |
 
-### M5 · 压测与调优
-文件：bench/
-- YCSB 式 workload：读多 / 写多 / 范围扫描
-- 与 LevelDB 对比
-验收（硬指标）：
-- 给出吞吐 + P50 / P99 延迟数字
-- 连续跑 1 小时无内存泄漏、无性能衰减
+ITarget 六个方法：Connect / CreateTable / WriteBatch / Commit / Rollback / Close。
 
-### M6 · B+Tree 第二引擎（前提：M1–M5 全通过）
-文件：storage/bplus_engine/
-验收：实现同一 StorageEngine 接口；bench 给出 LSM vs B+Tree 对比数据。
+验收：能建表、能批量写 10 万行。
 
-## 3. “留空间”现在就要做的 4 件事
+## M4 · 类型映射 + DDL（2 周）⭐
 
-1. 写 storage/storage_engine.h（接口）
-2. lsm_engine 实现它
-3. 建空目录 storage/bplus_engine/ 占位
-4. tests / bench / cdc 一律只依赖接口
+| 文件 | 位置 |
+|---|---|
+| type_map.h / .cpp | src/config |
+| type_map.yaml | config |
+| column_override.yaml | config |
+| extractor.h / .cpp | src/schema |
+| ddl_builder.h / .cpp | src/schema |
+| identifier.h / .cpp | src/schema |
 
-→ 将来加 B+Tree，上层代码零改动。
+验收：生成的 DDL 能在目标库执行，类型正确。
 
-## 4. 每个里程碑的通用验收动作
+## M5 · 全量搬运（2 周）⭐
 
-- 编译通过（CMake）
-- 单元测试通过
-- 更新 docs/ 里的进度记录
-- 打一个 git tag（建议 M0 就先 git init）
+| 文件 | 位置 |
+|---|---|
+| copier.h / .cpp | src/data |
+| batch_writer.h / .cpp | src/data |
+| progress.h / .cpp | src/data |
+
+验收：100 万行迁移完成，行数一致，耗时达标。
+
+## M6 · 校验（1 周）
+
+| 文件 | 位置 |
+|---|---|
+| verifier.h / .cpp | src/verify |
+| checksum.h / .cpp | src/verify |
+
+验收：人为篡改目标库 1 行，能检出。
+
+## M7 · 增量 CDC（3-4 周）
+
+| 文件 | 位置 |
+|---|---|
+| change_event.h | src/cdc |
+| binlog_reader.h / .cpp | src/cdc |
+| change_applier.h / .cpp | src/cdc |
+| offset_store.h / .cpp | src/cdc |
+
+验收：迁移中 insert/update/delete，目标库 5 秒内同步。
+
+## M8 · 工程化（1-2 周）
+
+CLI 子命令：inspect / schema / copy / verify / sync
+
+## M9 · DM8（可选）
+
+dm8_target.h / .cpp + config/type_map_dm8.yaml
