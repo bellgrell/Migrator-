@@ -933,6 +933,10 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
 }
 
 Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
+#ifndef MIG_ENABLE_REPAIR
+  (void)o; (void)src; (void)tgt; (void)m;
+  return Status::Err(Code::kUnsupported, "repair module not built");
+#else
   if (o.target_kind == "sim") return Status::Err(Code::kUnsupported, "repair not supported for sim");
   Status st;
   std::shared_ptr<ISource> dst;
@@ -1060,6 +1064,7 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   }
   m.log("repair finished: " + std::to_string(repaired) + " table(s) adjusted");
   return Status::OK();
+#endif
 }
 
 void write_log_file(Metrics& m, const std::string& dir) {

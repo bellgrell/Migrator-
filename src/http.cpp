@@ -104,8 +104,13 @@ void handle(socket_t fd, Metrics& m) {
   } else if (path == "/api/health") {
     body = "{\"ok\":true}";
   } else if (path == "/metrics") {
+#ifdef MIG_ENABLE_METRICS
     ctype = "text/plain; version=0.0.4; charset=utf-8";
     body = m.prometheus();
+#else
+    code = 404;
+    body = "{\"error\":\"metrics module not built\"}";
+#endif
   } else {
     code = 404;
     body = "{\"error\":\"not found\"}";

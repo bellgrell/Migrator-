@@ -3,7 +3,16 @@
 CXX      ?= c++
 CXXFLAGS  = -std=c++17 -O2 -Wall -Wextra -Isrc -MMD -MP
 LDFLAGS   =
+
+# 可选模块（1=编译进来，0=不编译）
+WITH_PG_CDC   ?= 1
+WITH_REPAIR   ?= 1
+WITH_METRICS  ?= 1
+WITH_SNAPSHOT ?= 1
+WITH_RESUME   ?= 1
+
 SRCS      = $(wildcard src/*.cpp)
+SRCS     += $(if $(filter 1,$(WITH_PG_CDC)),$(wildcard src/ext/*.cpp))
 OBJS      = $(patsubst src/%.cpp,build/%.o,$(SRCS))
 DEPS      = $(OBJS:.o=.d)
 BIN       = build/migrator
@@ -16,6 +25,22 @@ MYSQL_PREFIX :=
 endif
 ifeq ($(wildcard $(PG_PREFIX)/include/libpq-fe.h),)
 PG_PREFIX :=
+endif
+
+ifeq ($(WITH_PG_CDC),1)
+CXXFLAGS += -DMIG_ENABLE_PG_CDC
+endif
+ifeq ($(WITH_REPAIR),1)
+CXXFLAGS += -DMIG_ENABLE_REPAIR
+endif
+ifeq ($(WITH_METRICS),1)
+CXXFLAGS += -DMIG_ENABLE_METRICS
+endif
+ifeq ($(WITH_SNAPSHOT),1)
+CXXFLAGS += -DMIG_ENABLE_SNAPSHOT
+endif
+ifeq ($(WITH_RESUME),1)
+CXXFLAGS += -DMIG_ENABLE_RESUME
 endif
 
 ifneq ($(MYSQL_PREFIX),)
@@ -37,7 +62,7 @@ $(BIN): $(OBJS)
 	$(CXX) $(OBJS) -o $@ $(LDFLAGS) -lpthread
 
 build/%.o: src/%.cpp
-	@mkdir -p build
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:

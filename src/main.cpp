@@ -10,6 +10,36 @@
 
 namespace {
 
+void print_features() {
+  std::printf("mini-migrator modules:\n");
+  std::printf("  core        on\n");
+#ifdef MIG_ENABLE_PG_CDC
+  std::printf("  pg_cdc      on\n");
+#else
+  std::printf("  pg_cdc      off\n");
+#endif
+#ifdef MIG_ENABLE_REPAIR
+  std::printf("  repair      on\n");
+#else
+  std::printf("  repair      off\n");
+#endif
+#ifdef MIG_ENABLE_METRICS
+  std::printf("  metrics     on\n");
+#else
+  std::printf("  metrics     off\n");
+#endif
+#ifdef MIG_ENABLE_SNAPSHOT
+  std::printf("  snapshot    on\n");
+#else
+  std::printf("  snapshot    off\n");
+#endif
+#ifdef MIG_ENABLE_RESUME
+  std::printf("  resume      on\n");
+#else
+  std::printf("  resume      off\n");
+#endif
+}
+
 void usage() {
   std::printf(
       "mini-migrator - 数据库迁移工具\n"
@@ -71,6 +101,7 @@ void usage() {
       "  --tables <N>                  模拟表数（默认 4）\n"
       "  --port <N>                    面板端口（默认 8123）\n"
       "  --exit                        迁移完退出\n"
+      "  --features                    显示编译进来的模块\n"
       "  -h, --help                    显示帮助\n");
 }
 
@@ -148,9 +179,29 @@ int main(int argc, char** argv) {
     else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
     else if (a == "--cdc-slot") o.cdc_slot = next();
     else if (a == "--exit") exit_after = true;
+    else if (a == "--features") { print_features(); return 0; }
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
   }
+
+#ifndef MIG_ENABLE_SNAPSHOT
+  if (o.consistent_snapshot) {
+    std::fprintf(stderr, "[fatal] consistent snapshot module not built\n");
+    return 2;
+  }
+#endif
+#ifndef MIG_ENABLE_RESUME
+  if (o.resume) {
+    std::fprintf(stderr, "[fatal] resume module not built\n");
+    return 2;
+  }
+#endif
+#ifndef MIG_ENABLE_REPAIR
+  if (o.repair) {
+    std::fprintf(stderr, "[fatal] repair module not built\n");
+    return 2;
+  }
+#endif
 
   if (o.resume && o.truncate_target) {
     std::fprintf(stderr, "[warn] --resume and --truncate are mutually exclusive; resume disabled\n");

@@ -43,6 +43,21 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+## Модули
+
+Дополнительные модули включены по умолчанию и могут быть отключены при сборке:
+
+```bash
+make WITH_PG_CDC=0 WITH_REPAIR=0
+# или через CMake:
+cmake -B build -DMIG_ENABLE_PG_CDC=OFF -DMIG_ENABLE_REPAIR=OFF
+cmake --build build -j
+```
+
+`./build/migrator --features` показывает включённые модули: `pg_cdc`, `repair`, `metrics`, `snapshot`, `resume`.
+
+Базовый бинарник по-прежнему зависит только от `libmysqlclient` и `libpq`.
+
 ## Быстрый старт
 
 MySQL → PostgreSQL:

@@ -888,4 +888,10 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
   return Status::OK();
 }
 
+#ifndef MIG_ENABLE_PG_CDC
+Status run_pg_cdc(const Options&, Metrics&, int) {
+  return Status::Err(Code::kUnsupported, "PG CDC module not built");
+}
+#endif
+
 }  // namespace mig

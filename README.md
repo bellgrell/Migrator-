@@ -43,6 +43,21 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+## Modules
+
+Optional modules are compiled in by default and can be disabled at build time:
+
+```bash
+make WITH_PG_CDC=0 WITH_REPAIR=0
+# or with CMake:
+cmake -B build -DMIG_ENABLE_PG_CDC=OFF -DMIG_ENABLE_REPAIR=OFF
+cmake --build build -j
+```
+
+`./build/migrator --features` lists the compiled modules: `pg_cdc`, `repair`, `metrics`, `snapshot`, `resume`.
+
+The core binary still depends only on `libmysqlclient` and `libpq`.
+
 ## Quick start
 
 MySQL to PostgreSQL:

@@ -43,6 +43,21 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+## 模块
+
+可选模块默认编译进来，也可以在构建时关闭：
+
+```bash
+make WITH_PG_CDC=0 WITH_REPAIR=0
+# 或者用 CMake：
+cmake -B build -DMIG_ENABLE_PG_CDC=OFF -DMIG_ENABLE_REPAIR=OFF
+cmake --build build -j
+```
+
+`./build/migrator --features` 会列出编译进来的模块：`pg_cdc`、`repair`、`metrics`、`snapshot`、`resume`。
+
+核心二进制仍然只依赖 `libmysqlclient` 和 `libpq`。
+
 ## 快速开始
 
 MySQL 到 PostgreSQL：
