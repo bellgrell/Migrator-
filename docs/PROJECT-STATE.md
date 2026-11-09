@@ -60,6 +60,9 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 | 单表 10 万行 | 0.42s → 240k rows/s |
 | 单表 500 万行（顺序） | 迁移 4.88s → 1.05M rows/s，verify PASS |
 | 单表 500 万行（主键 8 区间） | 迁移 4.06s → **1.38M rows/s**，verify PASS |
+| openGauss 6.0.0：demo 库 | 100,010 行 / 0.53s，checksum PASS |
+| openGauss 6.0.0：511 万行 | 11.33s → 451k rows/s（4 区间并行），checksum PASS |
+| openGauss 6.0.0：视图 | `v_user_stats` 迁移成功，verify PASS |
 | CDC 增删改 | 实时同步，含负数 DECIMAL |
 | CDC DDL | ADD COLUMN 自动同步 |
 
@@ -90,8 +93,9 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 - 不支持 BIT / ENUM / SET / GEOMETRY 列
 - DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
 - DM8 未实现
-- openGauss 走 PG 协议：新增 mysql2og 模式，自动识别实例/会话设置/COPY 降级；
-  认证需 md5（默认 sha256 原生 libpq 不支持），库建议 DBCOMPATIBILITY='PG'
+- openGauss 走 PG 协议：mysql2og 模式，6.0.0 实测通过；
+  库需 DBCOMPATIBILITY='PG'；numeric 需 display_leading_zero；
+  若账号是 sha256 认证，原生 libpq 会报错，改用 md5
 - 目标表需为空或已对齐（重跑会撞主键）
 - 表内并行仅支持单列整数主键（tinyint/smallint/mediumint/int/bigint）；
   复合主键、无主键、非整数主键回退表级/顺序并行
@@ -99,8 +103,7 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 ## 7. 待办（按优先级）
 
 1. DM8 适配（类型映射 + dmfldr）
-2. openGauss 实测（本地 Docker 镜像下载受限；代码与 PG 协议层已回归 PASS，
-   真实实例冒烟见 bench/opengauss-smoke.sh）
+2. ~~openGauss 实测~~（已完成：Docker 6.0.0，全量/区间/视图/checksum 均 PASS）
 3. 根目录 README 更新（现有版本过时）
 4. ~~单表主键区间并行~~（已完成：`--workers` + 单列整数主键，5M 行 1.05M → 1.38M rows/s）
 5. CDC 事件批量应用（现在逐条 SQL，高写入量会延迟）

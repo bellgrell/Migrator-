@@ -200,6 +200,9 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 
 ## 16. openGauss 对接
 
+> 已在 openGauss 6.0.0（Docker `enmotech/opengauss:latest`，aarch64）实测：
+> 10 万行迁移 + checksum PASS，511 万行 11.33s（451k rows/s）+ 区间并行 PASS，视图迁移 PASS。
+
 模式：`--mode mysql2og`（MySQL → openGauss），`mysql2opengauss` 为别名；
 `--mode opengauss` 仅目标端。
 
@@ -214,8 +217,9 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 
 认证注意事项：
 
-- 原生 libpq 只支持 md5 / scram；openGauss 默认 `sha256` 会报
-  `unsupported authentication method`。迁移账号改用 md5：
+- 原生 libpq 支持 md5 / scram；部分 openGauss 版本默认 `sha256`，会报
+  `unsupported authentication method`。遇到时把迁移账号改为 md5（6.0.0 容器镜像
+  实测可直接用密码连接，无需改）：
 
       ALTER SYSTEM SET password_encryption_type = 0;
       -- 重新设置一次密码，才会以 md5 存储
@@ -231,7 +235,9 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 - 会话固定 `client_encoding=UTF8`、`standard_conforming_strings=on`；
 - checksum 校验的游标优先 `NO SCROLL`，失败自动降级；
 - COPY / SAVEPOINT / ANALYZE / 索引迁移与 PostgreSQL 路径一致；
-- 布尔值 COPY 输出改为 `true`/`false`，两边都兼容。
+- 布尔值 COPY 输出改为 `true`/`false`，两边都兼容；
+- openGauss 的 numeric 默认输出 `.17`（省略前导 0），连接时设
+  `behavior_compat_options='display_leading_zero'`，checksum 才不会假阳性。
 
 已知限制：openGauss 需要在目标库开启 PG 兼容模式；JDBC 驱动/ssl 认证等
 高级选项不在本工具范围内（只使用 libpq 基础能力）。

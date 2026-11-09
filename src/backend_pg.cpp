@@ -108,6 +108,10 @@ class PgTarget : public ITarget {
     // 请求 openGauss 但连到 PG 时，不做 openGauss 特化（describe 会标注）
     if (og_ && !server_is_og_) og_ = false;
 
+    // openGauss 的 numeric 输出默认省略整数位的 0（.17），
+    // 打开 display_leading_zero 才和 MySQL/PostgreSQL 的 0.17 一致
+    if (og_) exec_simple("SET behavior_compat_options = 'display_leading_zero'");
+
     return exec_simple("BEGIN");
   }
 

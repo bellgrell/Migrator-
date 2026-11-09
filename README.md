@@ -18,7 +18,7 @@ C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（
 | CDC 轮转 | binlog 跨文件自动跟随 |
 | CDC DDL | ALTER / CREATE / DROP 基础转换后执行 |
 | 监控 | Web 面板 + Qt 6 桌面版 |
-| openGauss | `--mode mysql2og`，自动识别实例、PG 兼容库、md5 认证 |
+| openGauss | `--mode mysql2og`，6.0.0 实测：511 万行 11.33s / 451k rows/s |
 
 ## 快速开始
 

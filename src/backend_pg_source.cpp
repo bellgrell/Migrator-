@@ -84,6 +84,9 @@ class PgSource : public ISource {
     if (vr) PQclear(vr);
     server_is_og_ = server_version_.find("openGauss") != std::string::npos ||
                     server_version_.find("GaussDB") != std::string::npos;
+    // 与目标端一致：numeric 输出带前导 0，避免 checksum 假阳性
+    if (server_is_og_)
+      exec("SET behavior_compat_options = 'display_leading_zero'");
     return exec("BEGIN");
   }
 
