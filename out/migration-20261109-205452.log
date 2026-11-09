@@ -1,0 +1,30 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : MySQL source (127.0.0.1:3306/demo)
+target     : PostgreSQL target (127.0.0.1:5432/demo_dst)
+rows_done  : 100000
+rows_total : 100000
+errors     : 0
+batches    : 50
+bytes      : 15855812
+verify     : skipped
+----------------------------------------
+[   0.00s] source: MySQL source (127.0.0.1:3306/demo)
+[   0.00s] target: PostgreSQL target (127.0.0.1:5432/demo_dst)
+[   0.00s] batch=2000  workers=2  throttle=0ms
+[   0.04s] found 1 table(s), 100,000 rows total
+[   0.04s] === table users (100,000 rows)
+[   0.04s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.41s] ok users: 100,000 rows
+[   0.41s] migration finished: 100,000 rows, 0 errors, 0s

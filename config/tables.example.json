@@ -1,0 +1,6 @@
+{
+  "tables": {
+    "daily_stats": "rebuild:sql/daily_stats.sql",
+    "tmp_cache": "skip"
+  }
+}

@@ -1,0 +1,221 @@
+mini-migrator migration log
+mode       : sim
+source     : sim source (6 tables, 600000 rows)
+target     : sim target (in-memory counters)
+rows_done  : 600000
+rows_total : 600000
+errors     : 0
+batches    : 1200
+bytes      : 113100020
+verify     : skipped
+----------------------------------------
+[   0.00s] source: sim source (6 tables, 600000 rows)
+[   0.00s] target: sim target (in-memory counters)
+[   0.00s] batch=500  workers=2  throttle=120ms
+[   0.00s] found 6 table(s), 600,000 rows total
+[   0.00s] parallel mode: 2 worker(s)
+[   0.00s] === table users (100,000 rows)
+[   0.00s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.00s] === table orders (100,000 rows)
+[   0.00s] DDL for orders:
+CREATE TABLE IF NOT EXISTS "orders" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   1.11s]   batch 10/200  rows 5,000/100,000  4496 rows/s  5%
+[   1.11s]   batch 10/200  rows 5,000/100,000  4491 rows/s  5%
+[   2.35s]   batch 20/200  rows 10,000/100,000  4262 rows/s  10%
+[   2.35s]   batch 20/200  rows 10,000/100,000  4248 rows/s  10%
+[   3.59s]   batch 30/200  rows 15,000/100,000  4183 rows/s  15%
+[   3.60s]   batch 30/200  rows 15,000/100,000  4171 rows/s  15%
+[   4.83s]   batch 40/200  rows 20,000/100,000  4142 rows/s  20%
+[   4.84s]   batch 40/200  rows 20,000/100,000  4128 rows/s  20%
+[   6.07s]   batch 50/200  rows 25,000/100,000  4119 rows/s  25%
+[   6.09s]   batch 50/200  rows 25,000/100,000  4102 rows/s  25%
+[   7.31s]   batch 60/200  rows 30,000/100,000  4103 rows/s  30%
+[   7.34s]   batch 60/200  rows 30,000/100,000  4085 rows/s  30%
+[   8.55s]   batch 70/200  rows 35,000/100,000  4093 rows/s  35%
+[   8.60s]   batch 70/200  rows 35,000/100,000  4071 rows/s  35%
+[   9.78s]   batch 80/200  rows 40,000/100,000  4090 rows/s  40%
+[   9.83s]   batch 80/200  rows 40,000/100,000  4067 rows/s  40%
+[  11.02s]   batch 90/200  rows 45,000/100,000  4084 rows/s  45%
+[  11.07s]   batch 90/200  rows 45,000/100,000  4063 rows/s  45%
+[  12.26s]   batch 100/200  rows 50,000/100,000  4079 rows/s  50%
+[  12.32s]   batch 100/200  rows 50,000/100,000  4058 rows/s  50%
+[  13.49s]   batch 110/200  rows 55,000/100,000  4076 rows/s  55%
+[  13.56s]   batch 110/200  rows 55,000/100,000  4055 rows/s  55%
+[  14.74s]   batch 120/200  rows 60,000/100,000  4071 rows/s  60%
+[  14.81s]   batch 120/200  rows 60,000/100,000  4051 rows/s  60%
+[  15.97s]   batch 130/200  rows 65,000/100,000  4071 rows/s  65%
+[  16.05s]   batch 130/200  rows 65,000/100,000  4049 rows/s  65%
+[  17.21s]   batch 140/200  rows 70,000/100,000  4068 rows/s  70%
+[  17.28s]   batch 140/200  rows 70,000/100,000  4050 rows/s  70%
+[  18.44s]   batch 150/200  rows 75,000/100,000  4066 rows/s  75%
+[  18.52s]   batch 150/200  rows 75,000/100,000  4049 rows/s  75%
+[  19.69s]   batch 160/200  rows 80,000/100,000  4063 rows/s  80%
+[  19.77s]   batch 160/200  rows 80,000/100,000  4047 rows/s  80%
+[  20.94s]   batch 170/200  rows 85,000/100,000  4059 rows/s  85%
+[  21.01s]   batch 170/200  rows 85,000/100,000  4045 rows/s  85%
+[  22.19s]   batch 180/200  rows 90,000/100,000  4056 rows/s  90%
+[  22.26s]   batch 180/200  rows 90,000/100,000  4043 rows/s  90%
+[  23.43s]   batch 190/200  rows 95,000/100,000  4055 rows/s  95%
+[  23.51s]   batch 190/200  rows 95,000/100,000  4041 rows/s  95%
+[  24.67s]   batch 200/200  rows 100,000/100,000  4054 rows/s  100%
+[  24.75s]   batch 200/200  rows 100,000/100,000  4040 rows/s  100%
+[  24.79s] ok orders: 100,000 rows
+[  24.79s] === table products (100,000 rows)
+[  24.79s] DDL for products:
+CREATE TABLE IF NOT EXISTS "products" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[  24.88s] ok users: 100,000 rows
+[  24.88s] === table events (100,000 rows)
+[  24.88s] DDL for events:
+CREATE TABLE IF NOT EXISTS "events" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[  25.90s]   batch 10/200  rows 5,000/100,000  4505 rows/s  5%
+[  26.00s]   batch 10/200  rows 5,000/100,000  4467 rows/s  5%
+[  27.13s]   batch 20/200  rows 10,000/100,000  4264 rows/s  10%
+[  27.24s]   batch 20/200  rows 10,000/100,000  4231 rows/s  10%
+[  28.37s]   batch 30/200  rows 15,000/100,000  4180 rows/s  15%
+[  28.48s]   batch 30/200  rows 15,000/100,000  4159 rows/s  15%
+[  29.62s]   batch 40/200  rows 20,000/100,000  4142 rows/s  20%
+[  29.72s]   batch 40/200  rows 20,000/100,000  4132 rows/s  20%
+[  30.87s]   batch 50/200  rows 25,000/100,000  4112 rows/s  25%
+[  30.97s]   batch 50/200  rows 25,000/100,000  4105 rows/s  25%
+[  32.11s]   batch 60/200  rows 30,000/100,000  4097 rows/s  30%
+[  32.22s]   batch 60/200  rows 30,000/100,000  4086 rows/s  30%
+[  33.35s]   batch 70/200  rows 35,000/100,000  4086 rows/s  35%
+[  33.47s]   batch 70/200  rows 35,000/100,000  4074 rows/s  35%
+[  34.60s]   batch 80/200  rows 40,000/100,000  4077 rows/s  40%
+[  34.72s]   batch 80/200  rows 40,000/100,000  4064 rows/s  40%
+[  35.84s]   batch 90/200  rows 45,000/100,000  4071 rows/s  45%
+[  35.96s]   batch 90/200  rows 45,000/100,000  4058 rows/s  45%
+[  37.09s]   batch 100/200  rows 50,000/100,000  4063 rows/s  50%
+[  37.20s]   batch 100/200  rows 50,000/100,000  4057 rows/s  50%
+[  38.34s]   batch 110/200  rows 55,000/100,000  4058 rows/s  55%
+[  38.45s]   batch 110/200  rows 55,000/100,000  4053 rows/s  55%
+[  39.58s]   batch 120/200  rows 60,000/100,000  4056 rows/s  60%
+[  39.69s]   batch 120/200  rows 60,000/100,000  4050 rows/s  60%
+[  40.82s]   batch 130/200  rows 65,000/100,000  4054 rows/s  65%
+[  40.94s]   batch 130/200  rows 65,000/100,000  4046 rows/s  65%
+[  42.06s]   batch 140/200  rows 70,000/100,000  4053 rows/s  70%
+[  42.19s]   batch 140/200  rows 70,000/100,000  4044 rows/s  70%
+[  43.30s]   batch 150/200  rows 75,000/100,000  4051 rows/s  75%
+[  43.43s]   batch 150/200  rows 75,000/100,000  4043 rows/s  75%
+[  44.54s]   batch 160/200  rows 80,000/100,000  4049 rows/s  80%
+[  44.68s]   batch 160/200  rows 80,000/100,000  4040 rows/s  80%
+[  45.79s]   batch 170/200  rows 85,000/100,000  4047 rows/s  85%
+[  45.92s]   batch 170/200  rows 85,000/100,000  4039 rows/s  85%
+[  47.03s]   batch 180/200  rows 90,000/100,000  4045 rows/s  90%
+[  47.17s]   batch 180/200  rows 90,000/100,000  4037 rows/s  90%
+[  48.28s]   batch 190/200  rows 95,000/100,000  4043 rows/s  95%
+[  48.41s]   batch 190/200  rows 95,000/100,000  4036 rows/s  95%
+[  49.54s]   batch 200/200  rows 100,000/100,000  4040 rows/s  100%
+[  49.66s]   batch 200/200  rows 100,000/100,000  4035 rows/s  100%
+[  49.66s] ok products: 100,000 rows
+[  49.66s] === table sessions (100,000 rows)
+[  49.66s] DDL for sessions:
+CREATE TABLE IF NOT EXISTS "sessions" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[  49.78s] ok events: 100,000 rows
+[  49.78s] === table payments (100,000 rows)
+[  49.78s] DDL for payments:
+CREATE TABLE IF NOT EXISTS "payments" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[  50.78s]   batch 10/200  rows 5,000/100,000  4476 rows/s  5%
+[  50.89s]   batch 10/200  rows 5,000/100,000  4522 rows/s  5%
+[  52.02s]   batch 20/200  rows 10,000/100,000  4239 rows/s  10%
+[  52.12s]   batch 20/200  rows 10,000/100,000  4272 rows/s  10%
+[  53.26s]   batch 30/200  rows 15,000/100,000  4166 rows/s  15%
+[  53.37s]   batch 30/200  rows 15,000/100,000  4184 rows/s  15%
+[  54.50s]   batch 40/200  rows 20,000/100,000  4129 rows/s  20%
+[  54.60s]   batch 40/200  rows 20,000/100,000  4150 rows/s  20%
+[  55.75s]   batch 50/200  rows 25,000/100,000  4103 rows/s  25%
+[  55.84s]   batch 50/200  rows 25,000/100,000  4127 rows/s  25%
+[  57.00s]   batch 60/200  rows 30,000/100,000  4085 rows/s  30%
+[  57.08s]   batch 60/200  rows 30,000/100,000  4112 rows/s  30%
+[  58.25s]   batch 70/200  rows 35,000/100,000  4073 rows/s  35%
+[  58.31s]   batch 70/200  rows 35,000/100,000  4102 rows/s  35%
+[  59.50s]   batch 80/200  rows 40,000/100,000  4064 rows/s  40%
+[  59.56s]   batch 80/200  rows 40,000/100,000  4090 rows/s  40%
+[  60.75s]   batch 90/200  rows 45,000/100,000  4058 rows/s  45%
+[  60.80s]   batch 90/200  rows 45,000/100,000  4083 rows/s  45%
+[  61.99s]   batch 100/200  rows 50,000/100,000  4055 rows/s  50%
+[  62.04s]   batch 100/200  rows 50,000/100,000  4078 rows/s  50%
+[  63.24s]   batch 110/200  rows 55,000/100,000  4050 rows/s  55%
+[  63.29s]   batch 110/200  rows 55,000/100,000  4071 rows/s  55%
+[  64.49s]   batch 120/200  rows 60,000/100,000  4046 rows/s  60%
+[  64.53s]   batch 120/200  rows 60,000/100,000  4068 rows/s  60%
+[  65.74s]   batch 130/200  rows 65,000/100,000  4043 rows/s  65%
+[  65.77s]   batch 130/200  rows 65,000/100,000  4066 rows/s  65%
+[  66.98s]   batch 140/200  rows 70,000/100,000  4040 rows/s  70%
+[  67.02s]   batch 140/200  rows 70,000/100,000  4062 rows/s  70%
+[  68.22s]   batch 150/200  rows 75,000/100,000  4041 rows/s  75%
+[  68.26s]   batch 150/200  rows 75,000/100,000  4059 rows/s  75%
+[  69.46s]   batch 160/200  rows 80,000/100,000  4039 rows/s  80%
+[  69.51s]   batch 160/200  rows 80,000/100,000  4056 rows/s  80%
+[  70.71s]   batch 170/200  rows 85,000/100,000  4038 rows/s  85%
+[  70.73s]   batch 170/200  rows 85,000/100,000  4057 rows/s  85%
+[  71.95s]   batch 180/200  rows 90,000/100,000  4037 rows/s  90%
+[  71.98s]   batch 180/200  rows 90,000/100,000  4054 rows/s  90%
+[  73.19s]   batch 190/200  rows 95,000/100,000  4036 rows/s  95%
+[  73.22s]   batch 190/200  rows 95,000/100,000  4053 rows/s  95%
+[  74.43s]   batch 200/200  rows 100,000/100,000  4036 rows/s  100%
+[  74.46s]   batch 200/200  rows 100,000/100,000  4052 rows/s  100%
+[  74.56s] ok sessions: 100,000 rows
+[  74.58s] ok payments: 100,000 rows
+[  74.58s] migration finished: 600,000 rows, 0 errors, 74s

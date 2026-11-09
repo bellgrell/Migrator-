@@ -1,0 +1,13 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : 
+target     : 
+rows_done  : 0
+rows_total : 0
+errors     : 0
+batches    : 0
+bytes      : 0
+verify     : skipped
+----------------------------------------
+[1150320.81s] cdc start: binlog.000001:542697922
+[1150320.85s] [error] cdc: DbError: binlog fetch: Replica can not handle replication events with the checksum that source is configured to log; the first event 'binlog.000001' at 542697922, the last event read from './binlog.000001' at 127, the last byte read from './binlog.000001' at 127.

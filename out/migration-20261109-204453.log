@@ -1,0 +1,50 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : MySQL source (127.0.0.1:3306/demo)
+target     : PostgreSQL target (127.0.0.1:5432/demo_dst)
+rows_done  : 100000
+rows_total : 100000
+errors     : 0
+batches    : 200
+bytes      : 15855812
+verify     : skipped
+----------------------------------------
+[   0.00s] source: MySQL source (127.0.0.1:3306/demo)
+[   0.00s] target: PostgreSQL target (127.0.0.1:5432/demo_dst)
+[   0.00s] batch=500  workers=2  throttle=100ms
+[   0.05s] found 1 table(s), 100,000 rows total
+[   0.05s] === table users (100,000 rows)
+[   0.05s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   1.06s]   batch 10/200  rows 5,000/100,000  4983 rows/s  5%
+[   2.15s]   batch 20/200  rows 10,000/100,000  4759 rows/s  10%
+[   3.25s]   batch 30/200  rows 15,000/100,000  4686 rows/s  15%
+[   4.36s]   batch 40/200  rows 20,000/100,000  4646 rows/s  20%
+[   5.46s]   batch 50/200  rows 25,000/100,000  4621 rows/s  25%
+[   6.56s]   batch 60/200  rows 30,000/100,000  4612 rows/s  30%
+[   7.66s]   batch 70/200  rows 35,000/100,000  4602 rows/s  35%
+[   8.77s]   batch 80/200  rows 40,000/100,000  4590 rows/s  40%
+[   9.87s]   batch 90/200  rows 45,000/100,000  4581 rows/s  45%
+[  10.99s]   batch 100/200  rows 50,000/100,000  4573 rows/s  50%
+[  12.09s]   batch 110/200  rows 55,000/100,000  4569 rows/s  55%
+[  13.19s]   batch 120/200  rows 60,000/100,000  4565 rows/s  60%
+[  14.31s]   batch 130/200  rows 65,000/100,000  4559 rows/s  65%
+[  15.42s]   batch 140/200  rows 70,000/100,000  4555 rows/s  70%
+[  16.52s]   batch 150/200  rows 75,000/100,000  4553 rows/s  75%
+[  17.63s]   batch 160/200  rows 80,000/100,000  4552 rows/s  80%
+[  18.74s]   batch 170/200  rows 85,000/100,000  4548 rows/s  85%
+[  19.84s]   batch 180/200  rows 90,000/100,000  4549 rows/s  90%
+[  20.93s]   batch 190/200  rows 95,000/100,000  4550 rows/s  95%
+[  22.04s]   batch 200/200  rows 100,000/100,000  4548 rows/s  100%
+[  22.14s] ok users: 100,000 rows
+[  22.14s] migration finished: 100,000 rows, 0 errors, 22s

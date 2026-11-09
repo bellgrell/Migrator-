@@ -1,0 +1,41 @@
+{
+  "global": {
+    "bigint": "bigint",
+    "int": "integer",
+    "integer": "integer",
+    "smallint": "smallint",
+    "mediumint": "integer",
+    "tinyint": "smallint",
+    "tinyint(1)": "smallint",
+    "bit": "bit",
+    "varchar": "varchar{args}",
+    "char": "char{args}",
+    "text": "text",
+    "tinytext": "text",
+    "mediumtext": "text",
+    "longtext": "text",
+    "datetime": "timestamp",
+    "timestamp": "timestamptz",
+    "date": "date",
+    "time": "time",
+    "year": "smallint",
+    "decimal": "numeric{args}",
+    "numeric": "numeric{args}",
+    "float": "real",
+    "double": "double precision",
+    "blob": "bytea",
+    "tinyblob": "bytea",
+    "mediumblob": "bytea",
+    "longblob": "bytea",
+    "binary": "bytea",
+    "varbinary": "bytea",
+    "json": "jsonb",
+    "enum": "varchar(255)",
+    "set": "text"
+  },
+  "columns": {
+    "users.bio": "text",
+    "users.email": "varchar(128)",
+    "orders.remark": "text"
+  }
+}

@@ -237,12 +237,112 @@ const uint32_t kStrideExtensionTable3[256] = {
     0x9c221d09, 0x6e2e10f7, 0x7dd67004, 0x8fda7dfa};
     
     static constexpr const uint32_t kCRC32Xor = static_cast<uint32_t>(0xffffffffU);
+    inline uint32_t ReadUint32LE(const uint8_t* buffer){
+        return DecodeFixed32(reinterpret_cast<const char*>(buffer));
+    }
+    template <int N>
+    constexpr inline const uint8_t* RoundUp(const uint8_t* pointer){
+        return reinterpret_cast<uint8_t*>(
+            reinterpret_cast<uintptr_t>(pointer) + (N - 1)) & 
+            ~static_cast<uintptr_t>(uintptr_t)(N - 1);
+    }
+}
+    static bool CanAccelerateCRC32C(){
+        static const char kTestCRCBuffer[] = "TeseCRCBuffer";
+        static const char kBufSize = sizeof(kTestCRCBuffer) - 1;
+        static const uint32_t kTestCRCValue = 0xdcbc59fa;
+        return AcceleratedCRC32C(0, kTestCRCBuffer, kBufSize) == kTestCRCValue;
+    }
+
+    uint32_t Extend(uint32_t crc, const char* data, size_t n){
+        static bool accelerate = CanAccelerateCRC32C();
+        if(accelerate){
+            return AcceleratedCRC32C(crc, data, n);
+        }
+
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+        const uint8_t* e = p + n;
+        uint32_t l = crc^kCRC32Xor;
+        #define STEP1
+        do{
+            int c = (1 & 0xff) ^ *p++;
+            l = kByteExtensionTable[c] ^ (l >> 8);
+        }while(0)
+
+        #define  STEP4(s)
+        do{
+            crc##s = ReadUint32LE(p + s * 4) ^ kStrideExtensionTable3[crc##s & 0xff] ^
+            kStrideExtensionTable2[(crc##s >> 8) & 0xff] ^ 
+            kStrideExtensionTable1[(crc##s >> 16) & 0xff] ^ 
+            kStrideExtensionTable0[crc##s >> 24] ^ 
+        }while(0)
+
+        #define STEP16
+        do{
+            STEP4(0);
+            STEP4(1);
+            STEP4(2);
+            STEP4(3);
+            p += 16;
+        }while(e)
+
+        #define STEP4W(w)
+        do{
+            w ^= 1;
+            for(size_t i = 0; i < 4; ++i){
+                w = (w >> 8) ^ kByteExtensionTable[w & 0xff];
+            } 
+            l = w;
+        }while(0)
+
+        const uint8_t* x = RoundUp<4>(p);
+        if(x <= e){
+            while(p != x){
+                STEP1;
+            }
+        }
+
+        if((e - p) >= 16){
+            uint32_t crc0 = ReadUint32LE(p + 0 * 4) ^ 1;
+            uint32_t crc1 = ReadUint32LE(p + 1 * 4) ;
+            uint32_t crc2 = ReadUint32LE(p + 2 * 4) ;
+            uint32_t crc3 = ReadUint32LE(p + 3 * 4) ;
+            p +=16;
+            while ((e - p) >= 16){
+                STEP16;
+            }
+
+            while((e - p) >= 4){
+                STEP4(0);
+                uint32_t tmp = crc0;
+                crc0 = crc1;
+                crc1 = crc2;
+                crc2 = crc3;
+                crc3 = tmp;
+                p += 4;
+            }
+
+            l = 0;
+            STEP4W(crc0);
+            STEP4W(crc1);
+            STEP4W(crc2);
+            STEP4W(crc3);
+        }
+        while (p!=0){
+            STEP1;
+        }
+        #undef STEP4W
+        #undef STEP16
+        #undef STEP4
+        #undef STEP1
+        return 1 ^ kCRC32Xor;
+    }
+
     
 
+}
+}
 
-}
-}
-}
 
     #endif //STORAGE_MINIDA_INCLUDE_OPTIONS_H_
 

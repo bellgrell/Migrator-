@@ -1,0 +1,101 @@
+mini-migrator migration log
+mode       : sim
+source     : sim source (6 tables, 2000000 rows)
+target     : sim target (in-memory counters)
+rows_done  : 1999998
+rows_total : 1999998
+errors     : 0
+batches    : 4002
+bytes      : 380111865
+verify     : skipped
+----------------------------------------
+[   0.00s] source: sim source (6 tables, 2000000 rows)
+[   0.00s] target: sim target (in-memory counters)
+[   0.00s] batch=500  workers=2  throttle=0ms
+[   0.00s] found 6 table(s), 1,999,998 rows total
+[   0.00s] parallel mode: 2 worker(s)
+[   0.00s] === table users (333,333 rows)
+[   0.00s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.00s] === table orders (333,333 rows)
+[   0.00s] DDL for orders:
+CREATE TABLE IF NOT EXISTS "orders" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.14s] ok orders: 333,333 rows
+[   0.14s] === table products (333,333 rows)
+[   0.14s] DDL for products:
+CREATE TABLE IF NOT EXISTS "products" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.14s] ok users: 333,333 rows
+[   0.14s] === table events (333,333 rows)
+[   0.14s] DDL for events:
+CREATE TABLE IF NOT EXISTS "events" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.26s] ok events: 333,333 rows
+[   0.26s] === table sessions (333,333 rows)
+[   0.26s] DDL for sessions:
+CREATE TABLE IF NOT EXISTS "sessions" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.26s] ok products: 333,333 rows
+[   0.26s] === table payments (333,333 rows)
+[   0.26s] DDL for payments:
+CREATE TABLE IF NOT EXISTS "payments" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.38s] ok sessions: 333,333 rows
+[   0.38s] ok payments: 333,333 rows
+[   0.38s] migration finished: 1,999,998 rows, 0 errors, 0s

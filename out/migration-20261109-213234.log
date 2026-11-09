@@ -1,0 +1,18 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : 
+target     : 
+rows_done  : 0
+rows_total : 0
+errors     : 0
+batches    : 0
+bytes      : 0
+verify     : PASS
+----------------------------------------
+[   0.02s] verifying row counts...
+[   0.03s] ok blobs rows=3
+[   0.06s] ok users rows=100,000
+[   0.06s] computing checksums (source vs target)...
+[   0.06s] checksum ok blobs rows=3
+[   0.19s] checksum ok users rows=100,000
+[   0.19s] verify PASSED

@@ -1,0 +1,38 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : MySQL source (127.0.0.1:3306/demo)
+target     : PostgreSQL target (127.0.0.1:5432/demo_dst)
+rows_done  : 0
+rows_total : 100000
+errors     : 1
+batches    : 0
+bytes      : 0
+verify     : skipped
+----------------------------------------
+[   0.00s] source: MySQL source (127.0.0.1:3306/demo)
+[   0.00s] target: PostgreSQL target (127.0.0.1:5432/demo_dst)
+[   0.00s] batch=2000 workers=1 indexes=on analyze=on
+[   0.05s] table policies loaded: 1
+[   0.05s] [rebuild] table daily_stats <- sql/daily_stats.sql
+[   0.06s] copy tables: 1, rebuild: 1, rows: 100,000
+[   0.06s] === table users (100,000 rows, 2 secondary indexes)
+[   0.06s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.07s] [error] write users: DbError: pg: ERROR:  invalid input syntax for type timestamp: "\x323032362d30312d30312030303a30313a3030"
+LINE 1: ... INTO "users" VALUES (1,'user_1','u1@example.com','\x3230323...
+                                                             ^
+ [sqlstate 22007]
+[   0.13s] [fail] users: 0 rows
+[   0.13s] rebuild ok: daily_stats
+[   0.13s] analyze done: 1/1 tables
+[   0.13s] migration finished: 0 rows, 1 errors, 0s

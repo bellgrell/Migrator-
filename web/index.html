@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-migrator · 迁移监控</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a30; --panel2:#0e1527; --line:#22304d;
+    --text:#e6edf3; --dim:#8b9bb4; --accent:#4cc9f0; --ok:#3ddc97;
+    --warn:#ffb703; --bad:#ff5d73; --grid:#1b2740;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;
+         border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0e1730,#0b1020)}
+  .brand{font-weight:700;font-size:18px;letter-spacing:.5px}
+  .brand span{color:var(--accent)}
+  .meta{color:var(--dim);font-size:12px;font-family:ui-monospace,Menlo,monospace}
+  .spacer{flex:1}
+  .badge{padding:5px 12px;border-radius:999px;font-size:12px;font-weight:600;
+         background:#1b2740;color:var(--dim);border:1px solid var(--line)}
+  .badge.run{background:rgba(76,201,240,.15);color:var(--accent);border-color:rgba(76,201,240,.4)}
+  .badge.done{background:rgba(61,220,151,.15);color:var(--ok);border-color:rgba(61,220,151,.4)}
+  .badge.err{background:rgba(255,93,115,.15);color:var(--bad);border-color:rgba(255,93,115,.4)}
+  main{padding:18px 22px 60px;max-width:1280px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .label{color:var(--dim);font-size:12px;margin-bottom:6px}
+  .card .value{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;
+               font-family:ui-monospace,Menlo,monospace}
+  .card .sub{color:var(--dim);font-size:12px;margin-top:4px}
+  .bar{height:6px;background:#1b2740;border-radius:6px;overflow:hidden;margin-top:10px}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4cc9f0,#3ddc97);
+         transition:width .35s ease}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+         padding:16px;margin-top:16px}
+  .panel h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--dim);
+            text-transform:uppercase;letter-spacing:.8px}
+  canvas{width:100%;height:180px;display:block}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--grid)}
+  th{color:var(--dim);font-weight:500;font-size:12px}
+  td.num{font-family:ui-monospace,Menlo,monospace;text-align:right;
+         font-variant-numeric:tabular-nums}
+  .tag{font-size:11px;padding:2px 8px;border-radius:999px;display:inline-block}
+  .tag.pending{background:#1b2740;color:var(--dim)}
+  .tag.running{background:rgba(76,201,240,.15);color:var(--accent)}
+  .tag.done{background:rgba(61,220,151,.15);color:var(--ok)}
+  .tag.failed{background:rgba(255,93,115,.15);color:var(--bad)}
+  .mini{height:5px;background:#1b2740;border-radius:5px;overflow:hidden;min-width:90px}
+  .mini i{display:block;height:100%;width:0;background:var(--accent)}
+  .log{height:220px;overflow:auto;font-family:ui-monospace,Menlo,monospace;
+       font-size:12px;line-height:1.65;color:#b9c6da;background:var(--panel2);
+       border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .log div{white-space:pre-wrap;word-break:break-all}
+  .log .ok{color:var(--ok)}
+  .log .bad{color:var(--bad)}
+  .dim{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">mini<span>-migrator</span></div>
+  <div class="meta" id="meta">connecting…</div>
+  <div class="spacer"></div>
+  <div class="badge" id="phase">idle</div>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card">
+      <div class="label">总进度</div>
+      <div class="value" id="pct">0.0%</div>
+      <div class="bar"><i id="pctbar"></i></div>
+      <div class="sub" id="rowsLine">0 / 0 行</div>
+    </div>
+    <div class="card">
+      <div class="label">吞吐</div>
+      <div class="value" id="speed">0</div>
+      <div class="sub">rows / sec</div>
+    </div>
+    <div class="card">
+      <div class="label">已用时</div>
+      <div class="value" id="elapsed">0s</div>
+      <div class="sub" id="etaLine">预计剩余 —</div>
+    </div>
+    <div class="card">
+      <div class="label">批次</div>
+      <div class="value" id="batches">0</div>
+      <div class="sub" id="bytesLine">0 B written</div>
+    </div>
+    <div class="card">
+      <div class="label">错误</div>
+      <div class="value" id="errors" style="color:var(--ok)">0</div>
+      <div class="sub" id="verifyLine">校验：等待中</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>实时吞吐（rows/s）</h2>
+    <canvas id="chart"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>表进度</h2>
+    <table>
+      <thead>
+        <tr><th>表名</th><th>状态</th><th class="num">已迁移</th><th class="num">总数</th>
+            <th class="num">错误</th><th style="width:26%">进度</th></tr>
+      </thead>
+      <tbody id="tables"><tr><td colspan="6" class="dim">等待数据…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>事件流</h2>
+    <div class="log" id="events"></div>
+  </section>
+</main>
+
+<script>
+var lastDone = 0, lastT = 0, rps = 0;
+
+function fmt(n){ return (n||0).toLocaleString('en-US'); }
+function fmtBytes(b){
+  if(!b) return '0 B';
+  var u=['B','KB','MB','GB','TB'], i=0, v=b;
+  while(v>=1024 && i<u.length-1){ v/=1024; i++; }
+  return v.toFixed(i===0?0:1)+' '+u[i];
+}
+function fmtDur(s){
+  if(!isFinite(s)||s<0) return '—';
+  s=Math.round(s);
+  if(s<60) return s+'s';
+  if(s<3600) return Math.floor(s/60)+'m '+String(s%60).padStart(2,'0')+'s';
+  return Math.floor(s/3600)+'h '+String(Math.floor((s%3600)/60)).padStart(2,'0')+'m';
+}
+
+function setPhase(s){
+  var el=document.getElementById('phase');
+  el.textContent=s.phase||'idle';
+  el.className='badge';
+  if(s.finished) el.className+=(s.errors>0?' err':' done');
+  else if(s.running) el.className+=' run';
+}
+
+function renderStatus(s){
+  document.getElementById('pct').textContent=(s.percent||0).toFixed(1)+'%';
+  document.getElementById('pctbar').style.width=Math.min(100,s.percent||0)+'%';
+  document.getElementById('rowsLine').textContent=fmt(s.rows_done)+' / '+fmt(s.rows_total)+' 行';
+  document.getElementById('speed').textContent=fmt(Math.round(s.rows_per_sec||0));
+  document.getElementById('elapsed').textContent=fmtDur(s.elapsed);
+  document.getElementById('etaLine').textContent='预计剩余 '+(s.running?fmtDur(s.eta):'—');
+  document.getElementById('batches').textContent=fmt(s.batches);
+  document.getElementById('bytesLine').textContent=fmtBytes(s.bytes)+' written';
+  var er=document.getElementById('errors');
+  er.textContent=fmt(s.errors);
+  er.style.color=(s.errors>0?'var(--bad)':'var(--ok)');
+  var v=s.verify||{};
+  var vl=document.getElementById('verifyLine');
+  if(v.running) vl.textContent='校验：进行中…';
+  else if(v.done) vl.textContent='校验：'+(v.mismatch>0?('失败 '+v.mismatch+' 张表'):'通过 ✓');
+  else vl.textContent='校验：等待中';
+  document.getElementById('meta').textContent=
+    (s.mode||'')+' · '+(s.source||'')+' → '+(s.target||'');
+  setPhase(s);
+}
+
+function renderTables(list){
+  var tb=document.getElementById('tables');
+  if(!list||!list.length){ tb.innerHTML='<tr><td colspan="6" class="dim">等待数据…</td></tr>'; return; }
+  var html='';
+  for(var i=0;i<list.length;i++){
+    var t=list[i];
+    html+='<tr>'+
+      '<td>'+t.name+'</td>'+
+      '<td><span class="tag '+t.state+'">'+t.state+'</span></td>'+
+      '<td class="num">'+fmt(t.done)+'</td>'+
+      '<td class="num">'+fmt(t.total)+'</td>'+
+      '<td class="num" style="color:'+(t.errors>0?'var(--bad)':'var(--dim)')+'">'+fmt(t.errors)+'</td>'+
+      '<td><div class="mini"><i style="width:'+Math.min(100,t.percent||0).toFixed(1)+'%"></i></div></td>'+
+      '</tr>';
+  }
+  tb.innerHTML=html;
+}
+
+function renderEvents(list){
+  var box=document.getElementById('events');
+  if(!list||!list.length) return;
+  var html='';
+  for(var i=0;i<list.length;i++){
+    var line=list[i];
+    var cls='';
+    if(line.indexOf('FAILED')>=0||line.indexOf('MISMATCH')>=0||line.indexOf('!!')>=0) cls='bad';
+    else if(line.indexOf(' ok ')>=0||line.indexOf('PASSED')>=0) cls='ok';
+    html+='<div class="'+cls+'">'+line.replace(/</g,'&lt;')+'</div>';
+  }
+  var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  box.innerHTML=html;
+  if(atBottom) box.scrollTop=box.scrollHeight;
+}
+
+function drawChart(series){
+  var cv=document.getElementById('chart');
+  var dpr=window.devicePixelRatio||1;
+  var w=cv.clientWidth, h=180;
+  if(cv.width!==w*dpr||cv.height!==h*dpr){ cv.width=w*dpr; cv.height=h*dpr; }
+  var g=cv.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,w,h);
+
+  g.strokeStyle='#1b2740'; g.lineWidth=1;
+  for(var i=0;i<=4;i++){ var y=10+(h-30)*i/4;
+    g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
+
+  if(!series||series.length<2){
+    g.fillStyle='#8b9bb4'; g.font='12px ui-monospace,Menlo,monospace';
+    g.fillText('等待采样…',10,20); return;
+  }
+
+  var pts=[];
+  for(var j=1;j<series.length;j++){
+    var dt=series[j][0]-series[j-1][0];
+    var dr=series[j][1]-series[j-1][1];
+    pts.push(dt>0?dr/dt:0);
+  }
+  var max=1;
+  for(var k=0;k<pts.length;k++) if(pts[k]>max) max=pts[k];
+  max*=1.15;
+
+  var pad=10, W=w, H=h-30;
+  g.beginPath();
+  for(var p=0;p<pts.length;p++){
+    var x=pad+(W-2*pad)*p/Math.max(1,pts.length-1);
+    var yy=10+H-(H*pts[p]/max);
+    if(p===0) g.moveTo(x,yy); else g.lineTo(x,yy);
+  }
+  g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.stroke();
+
+  g.lineTo(pad+W-2*pad,10+H); g.lineTo(pad,10+H); g.closePath();
+  var grad=g.createLinearGradient(0,0,0,10+H);
+  grad.addColorStop(0,'rgba(76,201,240,.28)');
+  grad.addColorStop(1,'rgba(76,201,240,0)');
+  g.fillStyle=grad; g.fill();
+
+  g.fillStyle='#8b9bb4'; g.font='11px ui-monospace,Menlo,monospace';
+  g.fillText(Math.round(max)+' r/s', pad, 14);
+}
+
+async function tick(){
+  try{
+    var rs=await fetch('/api/status',{cache:'no-store'});
+    var s=await rs.json();
+    renderStatus(s);
+
+    var rt=await fetch('/api/tables',{cache:'no-store'});
+    renderTables(await rt.json());
+
+    var re=await fetch('/api/events',{cache:'no-store'});
+    renderEvents(await re.json());
+
+    var rq=await fetch('/api/series',{cache:'no-store'});
+    drawChart(await rq.json());
+  }catch(e){
+    document.getElementById('meta').textContent='连接断开，重试中…';
+  }
+}
+
+tick();
+setInterval(tick, 600);
+window.addEventListener('resize', function(){ drawChart([]); });
+</script>
+</body>
+</html>

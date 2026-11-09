@@ -1,0 +1,208 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : MySQL source (127.0.0.1:3306/bigdb)
+target     : PostgreSQL target (127.0.0.1:5432/bigdb_dst)
+rows_done  : 8750000
+rows_total : 10000000
+errors     : 1
+batches    : 4375
+bytes      : 877259184
+verify     : skipped
+----------------------------------------
+[   0.00s] source: MySQL source (127.0.0.1:3306/bigdb)
+[   0.00s] target: PostgreSQL target (127.0.0.1:5432/bigdb_dst)
+[   0.00s] batch=2000 workers=4 indexes=on analyze=on
+[   0.04s] table policies loaded: 1
+[   0.44s] copy tables: 8, rebuild: 0, rows: 10,000,000
+[   0.44s] parallel mode: 4 worker(s)
+[   0.46s] === table events (1,250,000 rows, 1 secondary indexes)
+[   0.46s] DDL for events:
+CREATE TABLE IF NOT EXISTS "events" (
+  "id" bigint NOT NULL,
+  "user_id" bigint,
+  "kind" varchar(32),
+  "payload" text,
+  "ts" timestamp,
+  PRIMARY KEY ("id")
+);
+
+[   0.46s] === table logs (1,250,000 rows, 1 secondary indexes)
+[   0.46s] DDL for logs:
+CREATE TABLE IF NOT EXISTS "logs" (
+  "id" bigint NOT NULL,
+  "level" varchar(8),
+  "msg" text,
+  "ts" timestamp,
+  PRIMARY KEY ("id")
+);
+
+[   0.46s] === table order_items (1,250,000 rows, 0 secondary indexes)
+[   0.46s] DDL for order_items:
+CREATE TABLE IF NOT EXISTS "order_items" (
+  "id" bigint NOT NULL,
+  "order_id" bigint,
+  "product_id" bigint,
+  "qty" integer,
+  "price" numeric(10,2),
+  PRIMARY KEY ("id")
+);
+
+[   0.46s] === table orders (1,250,000 rows, 2 secondary indexes)
+[   0.46s] DDL for orders:
+CREATE TABLE IF NOT EXISTS "orders" (
+  "id" bigint NOT NULL,
+  "user_id" bigint,
+  "amount" numeric(12,2),
+  "status" varchar(16),
+  "created_at" timestamp,
+  PRIMARY KEY ("id")
+);
+
+[   1.17s]   batch 50/625  rows 100,000/1,250,000  142715 rows/s  8%
+[   1.17s]   batch 50/625  rows 100,000/1,250,000  142594 rows/s  8%
+[   1.22s]   batch 50/625  rows 100,000/1,250,000  133486 rows/s  8%
+[   1.29s]   batch 50/625  rows 100,000/1,250,000  121246 rows/s  8%
+[   1.71s]   batch 100/625  rows 200,000/1,250,000  160933 rows/s  16%
+[   1.71s]   batch 100/625  rows 200,000/1,250,000  160878 rows/s  16%
+[   1.85s]   batch 100/625  rows 200,000/1,250,000  144906 rows/s  16%
+[   2.03s]   batch 100/625  rows 200,000/1,250,000  127856 rows/s  16%
+[   2.47s]   batch 150/625  rows 300,000/1,250,000  149781 rows/s  24%
+[   2.48s]   batch 150/625  rows 300,000/1,250,000  148876 rows/s  24%
+[   2.59s]   batch 150/625  rows 300,000/1,250,000  141593 rows/s  24%
+[   2.84s]   batch 150/625  rows 300,000/1,250,000  126282 rows/s  24%
+[   3.03s]   batch 200/625  rows 400,000/1,250,000  156243 rows/s  32%
+[   3.04s]   batch 200/625  rows 400,000/1,250,000  155332 rows/s  32%
+[   3.14s]   batch 200/625  rows 400,000/1,250,000  149475 rows/s  32%
+[   3.29s]   batch 200/625  rows 400,000/1,250,000  141800 rows/s  32%
+[   3.43s]   batch 250/625  rows 500,000/1,250,000  168536 rows/s  40%
+[   3.44s]   batch 250/625  rows 500,000/1,250,000  167850 rows/s  40%
+[   3.70s]   batch 250/625  rows 500,000/1,250,000  154745 rows/s  40%
+[   4.01s]   batch 250/625  rows 500,000/1,250,000  140998 rows/s  40%
+[   4.09s]   batch 300/625  rows 600,000/1,250,000  165663 rows/s  48%
+[   4.10s]   batch 300/625  rows 600,000/1,250,000  164996 rows/s  48%
+[   4.29s]   batch 300/625  rows 600,000/1,250,000  157080 rows/s  48%
+[   4.51s]   batch 350/625  rows 700,000/1,250,000  173073 rows/s  56%
+[   4.51s]   batch 350/625  rows 700,000/1,250,000  173081 rows/s  56%
+[   4.51s]   batch 300/625  rows 600,000/1,250,000  148303 rows/s  48%
+[   5.01s]   batch 350/625  rows 700,000/1,250,000  154064 rows/s  56%
+[   5.24s]   batch 400/625  rows 800,000/1,250,000  167568 rows/s  64%
+[   5.25s]   batch 400/625  rows 800,000/1,250,000  167275 rows/s  64%
+[   5.32s]   batch 350/625  rows 700,000/1,250,000  144235 rows/s  56%
+[   5.50s]   batch 400/625  rows 800,000/1,250,000  158848 rows/s  64%
+[   5.61s]   batch 450/625  rows 900,000/1,250,000  174984 rows/s  72%
+[   5.62s]   batch 450/625  rows 900,000/1,250,000  174760 rows/s  72%
+[   5.73s]   batch 400/625  rows 800,000/1,250,000  151986 rows/s  64%
+[   5.94s]   batch 450/625  rows 900,000/1,250,000  164559 rows/s  72%
+[   6.02s]   batch 500/625  rows 1,000,000/1,250,000  179960 rows/s  80%
+[   6.03s]   batch 500/625  rows 1,000,000/1,250,000  179755 rows/s  80%
+[   6.23s]   batch 450/625  rows 900,000/1,250,000  156129 rows/s  72%
+[   6.36s]   batch 500/625  rows 1,000,000/1,250,000  169565 rows/s  80%
+[   6.41s]   batch 550/625  rows 1,100,000/1,250,000  185110 rows/s  88%
+[   6.41s]   batch 550/625  rows 1,100,000/1,250,000  184991 rows/s  88%
+[   6.66s]   batch 500/625  rows 1,000,000/1,250,000  161369 rows/s  80%
+[   6.76s]   batch 550/625  rows 1,100,000/1,250,000  174898 rows/s  88%
+[   6.76s]   batch 600/625  rows 1,200,000/1,250,000  190514 rows/s  96%
+[   6.77s]   batch 600/625  rows 1,200,000/1,250,000  190447 rows/s  96%
+[   6.97s] ok order_items: 1,250,000 rows
+[   6.97s] === table payments (1,250,000 rows, 0 secondary indexes)
+[   6.97s] DDL for payments:
+CREATE TABLE IF NOT EXISTS "payments" (
+  "id" bigint NOT NULL,
+  "order_id" bigint,
+  "method" varchar(32),
+  "paid_at" timestamp,
+  "amount" numeric(12,2),
+  PRIMARY KEY ("id")
+);
+
+[   7.09s]   batch 550/625  rows 1,100,000/1,250,000  165935 rows/s  88%
+[   7.16s]   batch 600/625  rows 1,200,000/1,250,000  179215 rows/s  96%
+[   7.29s] indexes built for logs: 1/1
+[   7.29s] ok logs: 1,250,000 rows
+[   7.29s] === table products (1,250,000 rows, 0 secondary indexes)
+[   7.29s] DDL for products:
+CREATE TABLE IF NOT EXISTS "products" (
+  "id" bigint NOT NULL,
+  "title" varchar(200),
+  "category" varchar(64),
+  "price" numeric(10,2),
+  "descr" text,
+  PRIMARY KEY ("id")
+);
+
+[   7.41s]   batch 50/625  rows 100,000/1,250,000  235630 rows/s  8%
+[   7.52s]   batch 600/625  rows 1,200,000/1,250,000  169993 rows/s  96%
+[   7.83s] indexes built for orders: 2/2
+[   7.83s] ok orders: 1,250,000 rows
+[   7.83s] === table sessions (1,250,000 rows, 0 secondary indexes)
+[   7.83s] DDL for sessions:
+CREATE TABLE IF NOT EXISTS "sessions" (
+  "id" bigint NOT NULL,
+  "user_id" bigint,
+  "started_at" timestamp,
+  "ended_at" timestamp,
+  "ip" varchar(45),
+  PRIMARY KEY ("id")
+);
+
+[   7.90s]   batch 50/625  rows 100,000/1,250,000  162558 rows/s  8%
+[   7.91s]   batch 100/625  rows 200,000/1,250,000  216638 rows/s  16%
+[   7.92s] [warn] index idx_user: DbError: pg: ERROR:  duplicate key value violates unique constraint "pg_class_relname_nsp_index"
+DETAIL:  Key (relname, relnamespace)=(idx_user, 2200) already exists.
+ [sqlstate ]
+[   7.92s] indexes built for events: 0/1
+[   7.92s] ok events: 1,250,000 rows
+[   7.92s] === table users (1,250,000 rows, 1 secondary indexes)
+[   7.92s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   7.92s] [error] create_table users: DbError: pg: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ [sqlstate ]
+[   8.24s]   batch 50/625  rows 100,000/1,250,000  240652 rows/s  8%
+[   8.30s]   batch 150/625  rows 300,000/1,250,000  227969 rows/s  24%
+[   8.36s]   batch 100/625  rows 200,000/1,250,000  185724 rows/s  16%
+[   8.60s]   batch 100/625  rows 200,000/1,250,000  259820 rows/s  16%
+[   8.66s]   batch 200/625  rows 400,000/1,250,000  238916 rows/s  32%
+[   8.76s]   batch 150/625  rows 300,000/1,250,000  203249 rows/s  24%
+[   8.93s]   batch 150/625  rows 300,000/1,250,000  270926 rows/s  24%
+[   9.01s]   batch 250/625  rows 500,000/1,250,000  246498 rows/s  40%
+[   9.24s]   batch 200/625  rows 400,000/1,250,000  205211 rows/s  32%
+[   9.32s]   batch 200/625  rows 400,000/1,250,000  267537 rows/s  32%
+[   9.40s]   batch 300/625  rows 600,000/1,250,000  248268 rows/s  48%
+[   9.70s]   batch 250/625  rows 500,000/1,250,000  266335 rows/s  40%
+[   9.73s]   batch 250/625  rows 500,000/1,250,000  205006 rows/s  40%
+[   9.77s]   batch 350/625  rows 700,000/1,250,000  251274 rows/s  56%
+[  10.10s]   batch 300/625  rows 600,000/1,250,000  264376 rows/s  48%
+[  10.17s]   batch 400/625  rows 800,000/1,250,000  251134 rows/s  64%
+[  10.21s]   batch 300/625  rows 600,000/1,250,000  205018 rows/s  48%
+[  10.50s]   batch 350/625  rows 700,000/1,250,000  261700 rows/s  56%
+[  10.58s]   batch 450/625  rows 900,000/1,250,000  250476 rows/s  72%
+[  10.70s]   batch 350/625  rows 700,000/1,250,000  205120 rows/s  56%
+[  10.89s]   batch 400/625  rows 800,000/1,250,000  261290 rows/s  64%
+[  10.96s]   batch 500/625  rows 1,000,000/1,250,000  251199 rows/s  80%
+[  11.18s]   batch 400/625  rows 800,000/1,250,000  205637 rows/s  64%
+[  11.26s]   batch 450/625  rows 900,000/1,250,000  262387 rows/s  72%
+[  11.33s]   batch 550/625  rows 1,100,000/1,250,000  253133 rows/s  88%
+[  11.64s]   batch 500/625  rows 1,000,000/1,250,000  262408 rows/s  80%
+[  11.66s]   batch 450/625  rows 900,000/1,250,000  205862 rows/s  72%
+[  11.71s]   batch 600/625  rows 1,200,000/1,250,000  253712 rows/s  96%
+[  11.90s] ok payments: 1,250,000 rows
+[  12.05s]   batch 550/625  rows 1,100,000/1,250,000  260518 rows/s  88%
+[  12.15s]   batch 500/625  rows 1,000,000/1,250,000  205591 rows/s  80%
+[  12.38s]   batch 600/625  rows 1,200,000/1,250,000  263548 rows/s  96%
+[  12.54s] ok sessions: 1,250,000 rows
+[  12.58s]   batch 550/625  rows 1,100,000/1,250,000  207888 rows/s  88%
+[  13.03s]   batch 600/625  rows 1,200,000/1,250,000  209070 rows/s  96%
+[  13.24s] ok products: 1,250,000 rows
+[  14.43s] analyze done: 7/8 tables
+[  14.43s] final commit ok (DDL persisted)
+[  14.43s] migration finished: 8,750,000 rows, 1 errors, 14s

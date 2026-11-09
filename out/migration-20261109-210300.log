@@ -1,0 +1,45 @@
+mini-migrator migration log
+mode       : mysql2pg
+source     : MySQL source (127.0.0.1:3306/demo)
+target     : PostgreSQL target (127.0.0.1:5432/demo_dst)
+rows_done  : 0
+rows_total : 100001
+errors     : 2
+batches    : 0
+bytes      : 0
+verify     : skipped
+----------------------------------------
+[   0.00s] source: MySQL source (127.0.0.1:3306/demo)
+[   0.00s] target: PostgreSQL target (127.0.0.1:5432/demo_dst)
+[   0.00s] batch=2000 workers=1 indexes=on analyze=on
+[   0.05s] [warn] table policy: Invalid: bad JSON in config/tables.json
+[   0.07s] copy tables: 2, rebuild: 0, rows: 100,001
+[   0.07s] === table daily_stats (1 rows, 0 secondary indexes)
+[   0.07s] DDL for daily_stats:
+);
+ATE TABLE IF NOT EXISTS "daily_stats" (
+  "d" date,
+  "c" bigint,
+  "s" numeric(20,2)
+
+[   0.07s] [error] create_table daily_stats: DbError: pg: ERROR:  syntax error at or near ")"
+LINE 1: );
+        ^
+ [sqlstate 42601]
+[   0.07s] === table users (100,000 rows, 2 secondary indexes)
+[   0.07s] DDL for users:
+CREATE TABLE IF NOT EXISTS "users" (
+  "id" bigint NOT NULL,
+  "name" varchar(64) NOT NULL,
+  "email" varchar(128),
+  "created_at" timestamp,
+  "score" numeric(10,2),
+  "bio" text,
+  "active" smallint,
+  PRIMARY KEY ("id")
+);
+
+[   0.07s] [error] create_table users: DbError: pg: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ [sqlstate 25P02]
+[   0.07s] analyze done: 0/2 tables
+[   0.07s] migration finished: 0 rows, 2 errors, 0s

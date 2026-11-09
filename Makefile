@@ -1,34 +1,49 @@
-# mini-database — 简易构建（当前环境无 cmake）
+# mini-migrator build (portable-ish)
 
-CXX      := g++
-CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -Iinclude
-BUILD    := build
+CXX      ?= c++
+CXXFLAGS  = -std=c++17 -O2 -Wall -Wextra -Isrc -Iinclude -MMD -MP
+LDFLAGS   =
+SRCS      = $(wildcard src/*.cpp)
+OBJS      = $(patsubst src/%.cpp,build/%.o,$(SRCS))
+DEPS      = $(OBJS:.o=.d)
+BIN       = build/migrator
 
-LIB_SRCS := $(wildcard src/*.cpp) $(wildcard src/*/*.cpp) $(wildcard src/*/*/*.cpp)
-LIB_OBJS := $(patsubst %.cpp,$(BUILD)/%.o,$(LIB_SRCS))
-LIB      := $(BUILD)/libminidb.a
+MYSQL_PREFIX := $(shell brew --prefix mysql-client 2>/dev/null)
+PG_PREFIX    := $(shell brew --prefix libpq 2>/dev/null)
 
-TEST_SRCS := $(wildcard tests/*.cpp)
-TEST_BINS := $(patsubst tests/%.cpp,$(BUILD)/%,$(TEST_SRCS))
+ifeq ($(wildcard $(MYSQL_PREFIX)/include/mysql/mysql.h),)
+MYSQL_PREFIX :=
+endif
+ifeq ($(wildcard $(PG_PREFIX)/include/libpq-fe.h),)
+PG_PREFIX :=
+endif
 
-.PHONY: all test clean
+ifneq ($(MYSQL_PREFIX),)
+CXXFLAGS += -DHAVE_MYSQL -I$(MYSQL_PREFIX)/include
+LDFLAGS  += -L$(MYSQL_PREFIX)/lib -lmysqlclient
+endif
 
-all: $(LIB)
+ifneq ($(PG_PREFIX),)
+CXXFLAGS += -DHAVE_PG -I$(PG_PREFIX)/include
+LDFLAGS  += -L$(PG_PREFIX)/lib -lpq
+endif
 
-$(LIB): $(LIB_OBJS)
-	@mkdir -p $(dir $@)
-	ar rcs $@ $^
+.PHONY: all clean run
 
-$(BUILD)/%.o: %.cpp
-	@mkdir -p $(dir $@)
+all: $(BIN)
+
+$(BIN): $(OBJS)
+	@mkdir -p build
+	$(CXX) $(OBJS) -o $@ $(LDFLAGS) -lpthread
+
+build/%.o: src/%.cpp
+	@mkdir -p build
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/%: tests/%.cpp $(LIB)
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $< -L$(BUILD) -lminidb -o $@
-
-test: $(TEST_BINS)
-	@for t in $(TEST_BINS); do echo "== running $$t"; $$t || exit 1; done
-
 clean:
-	rm -rf $(BUILD)
+	rm -rf build
+
+-include $(DEPS)
+
+run: $(BIN)
+	./$(BIN) --mode sim --rows 200000 --tables 4 --port 8123
