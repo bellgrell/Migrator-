@@ -65,7 +65,7 @@ std::string load_escape(const std::string& s) {
 
 class MySqlTarget : public ITarget {
  public:
-  explicit MySqlTarget(const Options& o) : opts_(o) {}
+  explicit MySqlTarget(const Options& o) : opts_(o), resume_(o.resume) {}
   ~MySqlTarget() override { close(); }
 
   Status connect() override {
@@ -301,7 +301,8 @@ class MySqlTarget : public ITarget {
       if (i) cols += ",";
       cols += "`" + st.cols[i] + "`";
     }
-    std::string sql = "LOAD DATA LOCAL INFILE '" + st.path + "' INTO TABLE `" +
+    std::string sql = "LOAD DATA LOCAL INFILE '" + st.path + "' " +
+                      (resume_ ? "IGNORE " : "") + "INTO TABLE `" +
                       table + "` CHARACTER SET utf8mb4 "
                       "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
                       "LINES TERMINATED BY '\\n' (" + cols + ")";
@@ -337,7 +338,8 @@ class MySqlTarget : public ITarget {
   }
 
   Status insert_batch(const std::string& table, const std::vector<Row>& rows) {
-    std::string sql = "INSERT INTO `" + table + "` VALUES ";
+    std::string sql = std::string("INSERT ") + (resume_ ? "IGNORE " : "") +
+                      "INTO `" + table + "` VALUES ";
     sql.reserve(rows.size() * 128);
     for (size_t i = 0; i < rows.size(); ++i) {
       if (i) sql += ",";
@@ -395,6 +397,7 @@ class MySqlTarget : public ITarget {
   Options opts_;
   MYSQL* conn_ = nullptr;
   bool load_enabled_ = true;
+  bool resume_ = false;
   std::mutex mu_;
   std::map<std::string, int64_t> written_;
   std::map<std::string, TableState> st_;

@@ -104,6 +104,9 @@ PostgreSQL → MySQL:
 | `--sslmode` | prefer | sslmode для PostgreSQL/openGauss |
 | `--mysql-ssl-mode` | PREFERRED | SSL-режим MySQL: DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | Число переподключений CDC |
+| `--consistent-snapshot` | выкл. | Согласованный снимок MySQL (одно соединение, workers=1) |
+| `--resume` | выкл. | Продолжить полную миграцию с позиции первичного ключа |
+| `--resume-dir` | out/resume | Каталог контрольных точек |
 
 Формат DSN: `host=...;port=...;user=...;password=...;db=...`.
 
@@ -144,6 +147,9 @@ PostgreSQL → MySQL:
 - Ошибки чтения при проверке контрольных сумм теперь приводят к FAIL, а не игнорируются.
 - Подключения при полной миграции повторяются с задержкой; CDC переподключается с последней зафиксированной позиции binlog.
 - Для удалённых БД откройте порт, разрешите хост клиента в грантах/файрволе; при необходимости используйте SSH-туннель или VPN.
+- `--resume` реализован только для источника MySQL; остальные источники выполняют полную копию.
+- `--consistent-snapshot` использует одно соединение MySQL и принудительно включает `workers=1`.
+- `--resume` и `--truncate` взаимоисключающи.
 - Источники PostgreSQL/openGauss сейчас используют один последовательный курсор; параллелизм по диапазонам первичного ключа реализован только для источников MySQL.
 - Массовая загрузка в MySQL использует `LOAD DATA LOCAL INFILE`; на сервере должен быть включён `local_infile=ON`. Таблицы с бинарными столбцами автоматически переключаются на пакетный INSERT.
 - Целевые базы openGauss следует создавать с `DBCOMPATIBILITY='PG'`; если учётная запись использует аутентификацию sha256, нативному libpq может потребоваться переключение на md5.
@@ -157,6 +163,12 @@ PostgreSQL → MySQL:
 - Русский
 
 Выбор языка сохраняется в localStorage браузера.
+
+## Метрики
+
+Endpoint Prometheus: `http://127.0.0.1:8123/metrics`.
+
+Метрики: `migrator_rows_done`, `migrator_rows_total`, `migrator_errors_total`, `migrator_batches_total`, `migrator_bytes_written_total`, `migrator_verify_mismatch`, `migrator_running`, `migrator_verified`, а также `migrator_table_rows_done{table="..."}`.
 
 ## Лицензия
 

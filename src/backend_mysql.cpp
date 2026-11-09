@@ -162,6 +162,45 @@ class MySqlSource : public ISource {
     return Status::OK();
   }
 
+  Status open_cursor_from(const std::string& table, const std::string& column,
+                          const std::string& after_literal) override {
+    close_cursor();
+    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+                          " WHERE " + kBt + column + kBt + " > " +
+                          after_literal + " ORDER BY " + kBt + column + kBt;
+    if (mysql_query(conn_, q.c_str())) return err("SELECT resume " + table);
+    res_ = mysql_use_result(conn_);
+    if (!res_) return err("use_result resume");
+    fields_ = mysql_fetch_fields(res_);
+    nfields_ = mysql_num_fields(res_);
+    return Status::OK();
+  }
+
+  Status begin_snapshot(std::string& file, uint64_t& pos) override {
+    if (mysql_query(conn_, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+      return err("set isolation");
+    if (mysql_query(conn_, "START TRANSACTION WITH CONSISTENT SNAPSHOT"))
+      return err("start snapshot");
+    if (mysql_query(conn_, "SHOW BINARY LOG STATUS") &&
+        mysql_query(conn_, "SHOW MASTER STATUS"))
+      return err("show binlog status");
+    MYSQL_RES* r = mysql_store_result(conn_);
+    if (!r) return err("binlog status result");
+    MYSQL_ROW row = mysql_fetch_row(r);
+    if (!row || !row[0] || !row[1]) {
+      mysql_free_result(r);
+      return Status::Err(Code::kDb, "empty binlog status");
+    }
+    file = row[0];
+    pos = (uint64_t)std::strtoull(row[1], nullptr, 10);
+    mysql_free_result(r);
+    return Status::OK();
+  }
+
+  void end_snapshot() override {
+    if (conn_) mysql_query(conn_, "COMMIT");
+  }
+
   Status pk_bounds(const std::string& table, const std::string& column,
                    int64_t& lo, int64_t& hi) override {
     const std::string q = std::string("SELECT MIN(") + kBt + column + kBt +

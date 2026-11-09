@@ -81,7 +81,8 @@ std::string copy_value(const Value& v) {
 class PgTarget : public ITarget {
  public:
   explicit PgTarget(const Options& o)
-      : opts_(o), use_copy_(o.use_copy), og_requested_(o.opengauss), og_(o.opengauss) {}
+      : opts_(o), use_copy_(o.use_copy && !o.resume), resume_(o.resume),
+        og_requested_(o.opengauss), og_(o.opengauss) {}
   ~PgTarget() override { close(); }
 
   Status connect() override {
@@ -319,6 +320,7 @@ class PgTarget : public ITarget {
       }
       o << ")";
     }
+    if (resume_) o << " ON CONFLICT DO NOTHING";
     Status st = exec_simple(o.str());
     if (!st.ok()) return st;
     std::lock_guard<std::mutex> lk(mu_);
@@ -329,6 +331,7 @@ class PgTarget : public ITarget {
   Options opts_;
   PGconn* conn_ = nullptr;
   bool use_copy_ = true;
+  bool resume_ = false;
   bool og_requested_ = false;
   bool og_ = false;
   bool server_is_og_ = false;

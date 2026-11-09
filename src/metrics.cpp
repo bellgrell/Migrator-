@@ -96,6 +96,36 @@ std::string Metrics::events_json() {
   return o.str();
 }
 
+std::string Metrics::prometheus() {
+  std::lock_guard<std::mutex> lk(mu);
+  std::ostringstream o;
+  auto gauge = [&](const char* name, const char* help, int64_t v) {
+    o << "# HELP " << name << " " << help << "\n";
+    o << "# TYPE " << name << " gauge\n";
+    o << name << " " << v << "\n";
+  };
+  gauge("migrator_rows_done", "Rows migrated", rows_done.load());
+  gauge("migrator_rows_total", "Rows planned", rows_total.load());
+  gauge("migrator_errors_total", "Errors", errors.load());
+  gauge("migrator_batches_total", "Batches", batches.load());
+  gauge("migrator_bytes_written_total", "Bytes written", bytes_written.load());
+  gauge("migrator_verify_mismatch", "Verification mismatches", verify_mismatch.load());
+  o << "# HELP migrator_running 1 if migration is running\n# TYPE migrator_running gauge\n"
+    << "migrator_running " << (running.load() ? 1 : 0) << "\n";
+  o << "# HELP migrator_verified 1 if verification passed\n# TYPE migrator_verified gauge\n"
+    << "migrator_verified " << (verified.load() && verify_mismatch.load() == 0 ? 1 : 0) << "\n";
+  for (const auto& t : tables) {
+    if (!t) continue;
+    o << "migrator_table_rows_done{table=\"" << json_escape(t->name) << "\"} "
+      << t->done.load() << "\n";
+    o << "migrator_table_rows_total{table=\"" << json_escape(t->name) << "\"} "
+      << t->total << "\n";
+    o << "migrator_table_errors{table=\"" << json_escape(t->name) << "\"} "
+      << t->errors.load() << "\n";
+  }
+  return o.str();
+}
+
 std::string Metrics::series_json() {
   std::lock_guard<std::mutex> lk(mu);
   std::ostringstream o;

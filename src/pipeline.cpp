@@ -114,6 +114,49 @@ const ColumnDef* single_int_pk(const TableSchema& s) {
   return nullptr;
 }
 
+const ColumnDef* single_pk(const TableSchema& s) {
+  if (s.primary_key.size() != 1) return nullptr;
+  for (const auto& c : s.columns) {
+    if (c.name == s.primary_key[0]) return &c;
+  }
+  return nullptr;
+}
+
+std::string safe_name(const std::string& s) {
+  std::string out;
+  for (char c : s) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '_' || c == '-')
+      out.push_back(c);
+    else
+      out.push_back('_');
+  }
+  return out;
+}
+
+std::string resume_file(const Options& o, const std::string& table) {
+  return o.resume_dir + "/" + safe_name(table) + ".pos";
+}
+
+std::string read_checkpoint(const Options& o, const std::string& table) {
+  std::ifstream in(resume_file(o, table), std::ios::binary);
+  if (!in) return std::string();
+  std::string v;
+  std::getline(in, v);
+  while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' '))
+    v.pop_back();
+  return v;
+}
+
+void write_checkpoint(const Options& o, const std::string& table,
+                      const std::string& v) {
+  if (v.empty()) return;
+  std::error_code ec;
+  std::filesystem::create_directories(o.resume_dir, ec);
+  std::ofstream out(resume_file(o, table), std::ios::trunc | std::ios::binary);
+  if (out) out << v;
+}
+
 bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tgt,
                 Metrics& m) {
   auto tmet = find_metric(m, job.name);
@@ -138,7 +181,26 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     return false;
   }
 
-  st = src.open_cursor(job.name);
+  const ColumnDef* pk = single_pk(job.schema);
+  int pk_idx = -1;
+  if (pk) {
+    for (size_t i = 0; i < job.schema.columns.size(); ++i) {
+      if (job.schema.columns[i].name == pk->name) { pk_idx = (int)i; break; }
+    }
+  }
+  std::string after;
+  if (o.resume && pk) after = read_checkpoint(o, job.name);
+  if (o.resume && !pk)
+    m.log("[warn] resume " + job.name + ": no single primary key, full copy");
+  if (!after.empty()) {
+    st = src.open_cursor_from(job.name, pk->name, after);
+    if (!st.ok()) {
+      m.log("[warn] resume " + job.name + ": " + st.str() + ", full copy");
+      st = src.open_cursor(job.name);
+    }
+  } else {
+    st = src.open_cursor(job.name);
+  }
   if (!st.ok()) {
     m.log("[error] open_cursor " + job.name + ": " + st.str());
     tmet->state = 3;
@@ -155,6 +217,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
   std::vector<Row> rows;
   int batch = 0;
   bool failed = false;
+  std::string pending_pk;
 
   while (true) {
     rows.clear();
@@ -177,6 +240,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
       break;
     }
 
+    if (pk_idx >= 0) pending_pk = rows.back()[(size_t)pk_idx].sql_literal();
     const int64_t n = (int64_t)rows.size();
     tmet->done += n;
     m.rows_done.fetch_add(n, std::memory_order_relaxed);
@@ -198,6 +262,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
         failed = true;
         break;
       }
+      if (o.resume && pk_idx >= 0) write_checkpoint(o, job.name, pending_pk);
     }
     if (batch % 10 == 0) m.sample();
 
@@ -218,7 +283,9 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     }
   }
 
-  tgt.commit();
+  Status final_cs = tgt.commit();
+  if (final_cs.ok() && o.resume && pk_idx >= 0)
+    write_checkpoint(o, job.name, pending_pk);
   src.close_cursor();
 
   // 索引在数据全部写入后创建（批量导入快很多）
@@ -250,6 +317,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
 
 bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
                        ITarget& tgt, Metrics& m) {
+  if (o.resume) return copy_table(o, job, src, tgt, m);
   auto tmet = find_metric(m, job.name);
   if (!tmet) return false;
 
@@ -600,6 +668,21 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     m.phase = "error";
     return st;
   }
+  if (o.consistent_snapshot) {
+    std::string snap_file;
+    uint64_t snap_pos = 0;
+    Status ss = src.begin_snapshot(snap_file, snap_pos);
+    if (ss.ok()) {
+      m.log("consistent snapshot at " + snap_file + ":" + std::to_string(snap_pos));
+      std::ofstream sp(o.snapshot_position_path, std::ios::trunc);
+      sp << snap_file << ":" << snap_pos;
+      std::ofstream cp(o.cdc_position_path, std::ios::trunc);
+      cp << snap_file << ":" << snap_pos;
+    } else {
+      m.log("[warn] consistent snapshot: " + ss.str());
+    }
+  }
+
   st = connect_retry(o, m, "target", [&]() { return tgt.connect(); });
   if (!st.ok()) {
     m.log("[error] target connect: " + st.str());
@@ -792,7 +875,7 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   }
 
   // ---- checksum：内容级校验 ----
-  if (o.checksum) {
+  if (o.checksum && o.target_kind != "sim") {
     Status st;
     std::shared_ptr<ISource> dst;
     if (o.target_kind == "mysql") {

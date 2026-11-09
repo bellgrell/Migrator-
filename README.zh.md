@@ -104,6 +104,9 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
 | `--mysql-ssl-mode` | PREFERRED | MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | CDC 断线重连次数 |
+| `--consistent-snapshot` | 关 | MySQL 一致性快照（单连接，自动 workers=1） |
+| `--resume` | 关 | 按主键水位断点续传 |
+| `--resume-dir` | out/resume | 断点文件目录 |
 
 DSN 格式：`host=...;port=...;user=...;password=...;db=...`。
 
@@ -144,6 +147,9 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 - checksum 读取失败会让校验直接 FAIL，不再静默跳过。
 - 全量连接失败会按退避重试；CDC 断线会从最后提交的 binlog 位点重连。
 - 远程数据库需要放行端口、在账号/防火墙中允许客户端 IP；必要时用 SSH 隧道或 VPN。
+- `--resume` 目前只对 MySQL 源实现，其他源会回退为全量复制。
+- `--consistent-snapshot` 使用单条 MySQL 连接，并强制 `workers=1`。
+- `--resume` 与 `--truncate` 互斥。
 - PostgreSQL/openGauss 源目前使用单游标顺序读取；单表区间并行只对 MySQL 源实现。
 - MySQL 目标批量导入使用 `LOAD DATA LOCAL INFILE`，服务端需要开启 `local_infile=ON`；含二进制列的表会自动回退为批量 INSERT。
 - openGauss 目标库应使用 `DBCOMPATIBILITY='PG'` 创建；如果账号使用 sha256 认证，原生 libpq 可能需要把迁移账号切换为 md5。
@@ -157,6 +163,12 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 - Русский
 
 语言选择会保存在浏览器 localStorage 中。
+
+## 指标
+
+Prometheus 端点：`http://127.0.0.1:8123/metrics`。
+
+暴露的指标包括 `migrator_rows_done`、`migrator_rows_total`、`migrator_errors_total`、`migrator_batches_total`、`migrator_bytes_written_total`、`migrator_verify_mismatch`、`migrator_running`、`migrator_verified`，以及按表的 `migrator_table_rows_done{table="..."}`。
 
 ## 许可证
 

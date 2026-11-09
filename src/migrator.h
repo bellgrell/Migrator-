@@ -98,6 +98,10 @@ struct Options {
   int connect_retries = 3;       // 连接失败重试次数
   int connect_backoff_ms = 500;  // 重试退避基数（毫秒）
   bool truncate_target = false;  // 迁移前 DROP 目标表，便于失败后重跑
+  bool consistent_snapshot = false;  // MySQL 全局一致性快照（单连接）
+  bool resume = false;               // 按主键水位断点续传
+  std::string resume_dir = "out/resume";
+  std::string snapshot_position_path = "out/snapshot-position.txt";
   int cdc_retries = 10;          // CDC 断线重连次数
   std::string sslmode = "prefer";           // PostgreSQL/openGauss
   std::string mysql_ssl_mode = "PREFERRED"; // DISABLED/PREFERRED/REQUIRED
@@ -158,6 +162,7 @@ struct Metrics {
   std::string tables_json();
   std::string events_json();
   std::string series_json();
+  std::string prometheus();
 };
 
 class ISource {
@@ -175,6 +180,17 @@ class ISource {
     (void)table; (void)column; (void)lo; (void)hi;
     return Status::Err(Code::kUnsupported, "pk range not supported");
   }
+  virtual Status open_cursor_from(const std::string& table,
+                                  const std::string& pk_col,
+                                  const std::string& after_literal) {
+    (void)table; (void)pk_col; (void)after_literal;
+    return Status::Err(Code::kUnsupported, "resume cursor not supported");
+  }
+  virtual Status begin_snapshot(std::string& file, uint64_t& pos) {
+    (void)file; (void)pos;
+    return Status::Err(Code::kUnsupported, "consistent snapshot not supported");
+  }
+  virtual void end_snapshot() {}
   virtual Status open_cursor_range(const std::string& table,
                                    const std::string& column, int64_t lo,
                                    int64_t hi) {

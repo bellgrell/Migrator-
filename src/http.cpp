@@ -103,6 +103,9 @@ void handle(socket_t fd, Metrics& m) {
     body = m.series_json();
   } else if (path == "/api/health") {
     body = "{\"ok\":true}";
+  } else if (path == "/metrics") {
+    ctype = "text/plain; version=0.0.4; charset=utf-8";
+    body = m.prometheus();
   } else {
     code = 404;
     body = "{\"error\":\"not found\"}";

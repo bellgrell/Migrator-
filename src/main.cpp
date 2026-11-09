@@ -48,6 +48,9 @@ void usage() {
       "  --connect-timeout <sec>       连接/读写超时（默认 10）\n"
       "  --connect-retries <N>         连接失败重试次数（默认 3）\n"
       "  --truncate                    迁移前 DROP 目标表，便于重跑\n"
+      "  --consistent-snapshot         MySQL 一致性快照（单连接，自动 workers=1）\n"
+      "  --resume                      按主键水位断点续传\n"
+      "  --resume-dir <path>           断点文件目录（默认 out/resume）\n"
       "  --sslmode <mode>              PostgreSQL/openGauss sslmode（默认 prefer）\n"
       "  --mysql-ssl-mode <mode>       MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED\n"
       "  --cdc-retries <N>             CDC 断线重连次数（默认 10）\n"
@@ -134,12 +137,20 @@ int main(int argc, char** argv) {
     else if (a == "--connect-timeout") o.connect_timeout = std::stoi(next());
     else if (a == "--connect-retries") o.connect_retries = std::stoi(next());
     else if (a == "--truncate") o.truncate_target = true;
+    else if (a == "--consistent-snapshot") { o.consistent_snapshot = true; o.workers = 1; o.pk_parallel = false; }
+    else if (a == "--resume") { o.resume = true; o.pk_parallel = false; }
+    else if (a == "--resume-dir") o.resume_dir = next();
     else if (a == "--sslmode") o.sslmode = next();
     else if (a == "--mysql-ssl-mode") o.mysql_ssl_mode = next();
     else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
     else if (a == "--exit") exit_after = true;
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
+  }
+
+  if (o.resume && o.truncate_target) {
+    std::fprintf(stderr, "[warn] --resume and --truncate are mutually exclusive; resume disabled\n");
+    o.resume = false;
   }
 
   struct ModeSpec { const char* mode; const char* s; const char* t; };

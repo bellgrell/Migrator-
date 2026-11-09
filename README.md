@@ -104,6 +104,9 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
 | `--mysql-ssl-mode` | PREFERRED | MySQL SSL mode: DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | CDC reconnect attempts |
+| `--consistent-snapshot` | off | MySQL consistent snapshot (single connection, forces workers=1) |
+| `--resume` | off | Resume full load from PK watermark |
+| `--resume-dir` | out/resume | Resume checkpoint directory |
 
 DSN format: `host=...;port=...;user=...;password=...;db=...`.
 
@@ -144,6 +147,9 @@ Typical table-level results with the same dataset:
 - Checksum read failures make verification FAIL instead of being silently skipped.
 - Full-load connections retry with backoff; CDC reconnects from the last committed binlog position.
 - For remote databases, open the DB port, allow the client host in grants/firewall, and use SSH tunnel/VPN if needed.
+- `--resume` is implemented for MySQL sources; other sources fall back to a full copy.
+- `--consistent-snapshot` uses a single MySQL connection and forces `workers=1`.
+- `--resume` and `--truncate` are mutually exclusive.
 - PostgreSQL/openGauss sources currently use a single sequential cursor; single-table range parallelism is implemented for MySQL sources only.
 - MySQL target bulk load uses `LOAD DATA LOCAL INFILE`; the server must have `local_infile=ON`. Tables with binary columns automatically fall back to batched INSERT.
 - openGauss target databases should be created with `DBCOMPATIBILITY='PG'`; if the account uses sha256 authentication, native libpq may require switching the migration account to md5.
@@ -157,6 +163,12 @@ The dashboard shows progress, throughput, per-table status, verification result 
 - Русский
 
 The language selection is stored in the browser (localStorage).
+
+## Metrics
+
+Prometheus endpoint: `http://127.0.0.1:8123/metrics`.
+
+Exposed metrics: `migrator_rows_done`, `migrator_rows_total`, `migrator_errors_total`, `migrator_batches_total`, `migrator_bytes_written_total`, `migrator_verify_mismatch`, `migrator_running`, `migrator_verified`, plus per-table `migrator_table_rows_done{table="..."}`.
 
 ## License
 
