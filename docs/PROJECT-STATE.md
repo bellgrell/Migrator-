@@ -78,11 +78,26 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 |---|---|---|---|
 | MySQL → openGauss | 10.62s | 481k rows/s | PASS |
 | MySQL → PostgreSQL | 12.42s | 411k rows/s | PASS |
-| MySQL → MySQL | 13.43s | 381k rows/s | PASS |
+| MySQL → MySQL | 13.31s | 384k rows/s | PASS |
 | openGauss → PostgreSQL | 15.94s | 320k rows/s | PASS |
 | PostgreSQL → openGauss | 19.16s | 267k rows/s | PASS |
-| PostgreSQL → MySQL | 30.98s | 165k rows/s | PASS |
-| openGauss → MySQL | 34.04s | 150k rows/s | PASS |
+| PostgreSQL → MySQL | 27.52s | 186k rows/s | PASS |
+| openGauss → MySQL | 22.71s | 225k rows/s | PASS |
+
+> MySQL 目标已改用 `LOAD DATA LOCAL INFILE`；上表为 4 workers。
+> 需要服务端 `local_infile=ON`；二进制列的表自动回退 INSERT。
+
+### 线程扩展性（LOAD DATA，5,110,000 行）
+
+| 模式 | 1 线程 | 2 线程 | 4 线程 | 8 线程 |
+|---|---|---|---|---|
+| MySQL → MySQL | 266k | 298k (+12%) | 384k (+29%) | 410k (+7%) |
+| MySQL → openGauss | 356k | 423k (+19%) | 485k (+15%) | 485k (0%) |
+| PostgreSQL → MySQL | 187k | 174k | 186k | 184k |
+| openGauss → MySQL | 231k | 230k | 225k | 227k |
+
+结论：MySQL 源在 4 线程后增长率明显下降（4→8 仅 +7%）；
+PG/openGauss 源没有表内主键区间并行，线程数基本无收益。
 | CDC 增删改 | 实时同步，含负数 DECIMAL |
 | CDC DDL | ADD COLUMN 自动同步 |
 

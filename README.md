@@ -20,7 +20,8 @@ C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（
 | 监控 | Web 面板 + Qt 6 桌面版 |
 | openGauss | `--mode mysql2og`，6.0.0 实测：511 万行 11.33s / 451k rows/s |
 | 多方向 | `pg2mysql` / `pg2og` / `og2pg` / `og2mysql` / `mysql2mysql`，均实测 verify PASS |
-| 压力测试 | 7 条路径 × 511 万行全部 verify PASS；最高 MySQL→openGauss 481k rows/s |
+| 压力测试 | 7 条路径 × 511 万行全部 verify PASS；最高 MySQL→openGauss 485k rows/s |
+| MySQL 目标 | `LOAD DATA LOCAL INFILE`；openGauss→MySQL 5M 行 225k rows/s，4 线程后扩展放缓 |
 
 ## 快速开始
 

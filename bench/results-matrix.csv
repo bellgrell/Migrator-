@@ -1,0 +1,8 @@
+case,mode,rows,time_s,rows_per_s,verify,errors
+mysql2pg,mysql2pg,5110000,12.42 s,411287,PASS,0
+mysql2og,mysql2og,5110000,10.62 s,481002,PASS,0
+mysql2mysql,mysql2mysql,5110000,13.43 s,380580,PASS,0
+og2pg,og2pg,5110000,15.94 s,320489,PASS,0
+og2mysql,og2mysql,5110000,34.04 s,150116,PASS,0
+pg2og,pg2og,5110000,19.16 s,266718,PASS,0
+pg2mysql,pg2mysql,5110000,30.98 s,164923,PASS,0
