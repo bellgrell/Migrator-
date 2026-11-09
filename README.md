@@ -1,5 +1,7 @@
 # mini-migrator
 
+**English** | [中文](README.zh.md) | [Русский](README.ru.md)
+
 A C++17 heterogeneous data migration tool for **MySQL, PostgreSQL and openGauss**. It supports full-load migration in multiple directions, row-count and checksum verification, and CDC (change data capture) from MySQL binlog to PostgreSQL/openGauss.
 
 The built-in web dashboard supports **Chinese / English / Russian** and can be switched in the top-right corner.
