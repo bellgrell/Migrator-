@@ -8,3 +8,8 @@ data/
 
 # generated test artifacts
 out/
+
+# internal docs and benchmark artifacts (kept locally)
+docs/
+bench/
+archive/

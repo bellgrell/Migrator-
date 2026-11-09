@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mini-migrator · 迁移监控</title>
+<title>mini-migrator · Migration Monitor</title>
 <style>
   :root{
     --bg:#0b1020; --panel:#121a30; --panel2:#0e1527; --line:#22304d;
@@ -19,6 +19,8 @@
   .brand span{color:var(--accent)}
   .meta{color:var(--dim);font-size:12px;font-family:ui-monospace,Menlo,monospace}
   .spacer{flex:1}
+  .lang{background:#121a30;color:var(--text);border:1px solid var(--line);
+        border-radius:8px;padding:6px 10px;font-size:12px;outline:none}
   .badge{padding:5px 12px;border-radius:999px;font-size:12px;font-weight:600;
          background:#1b2740;color:var(--dim);border:1px solid var(--line)}
   .badge.run{background:rgba(76,201,240,.15);color:var(--accent);border-color:rgba(76,201,240,.4)}
@@ -63,66 +65,151 @@
 <body>
 <header>
   <div class="brand">mini<span>-migrator</span></div>
-  <div class="meta" id="meta">connecting…</div>
+  <div class="meta" id="meta" data-i18n="connecting">connecting…</div>
   <div class="spacer"></div>
+  <select id="lang" class="lang" onchange="setLang(this.value)">
+    <option value="zh">中文</option>
+    <option value="en">English</option>
+    <option value="ru">Русский</option>
+  </select>
   <div class="badge" id="phase">idle</div>
 </header>
 
 <main>
   <section class="cards">
     <div class="card">
-      <div class="label">总进度</div>
+      <div class="label" data-i18n="progress">Progress</div>
       <div class="value" id="pct">0.0%</div>
       <div class="bar"><i id="pctbar"></i></div>
-      <div class="sub" id="rowsLine">0 / 0 行</div>
+      <div class="sub" id="rowsLine">0 / 0</div>
     </div>
     <div class="card">
-      <div class="label">吞吐</div>
+      <div class="label" data-i18n="throughput">Throughput</div>
       <div class="value" id="speed">0</div>
       <div class="sub">rows / sec</div>
     </div>
     <div class="card">
-      <div class="label">已用时</div>
+      <div class="label" data-i18n="elapsed">Elapsed</div>
       <div class="value" id="elapsed">0s</div>
-      <div class="sub" id="etaLine">预计剩余 —</div>
+      <div class="sub" id="etaLine">—</div>
     </div>
     <div class="card">
-      <div class="label">批次</div>
+      <div class="label" data-i18n="batches">Batches</div>
       <div class="value" id="batches">0</div>
-      <div class="sub" id="bytesLine">0 B written</div>
+      <div class="sub" id="bytesLine">0 B</div>
     </div>
     <div class="card">
-      <div class="label">错误</div>
+      <div class="label" data-i18n="errors">Errors</div>
       <div class="value" id="errors" style="color:var(--ok)">0</div>
-      <div class="sub" id="verifyLine">校验：等待中</div>
+      <div class="sub" id="verifyLine" data-i18n="verifyWaiting">verify: waiting</div>
     </div>
   </section>
 
   <section class="panel">
-    <h2>实时吞吐（rows/s）</h2>
+    <h2 data-i18n="chartTitle">Live throughput (rows/s)</h2>
     <canvas id="chart"></canvas>
   </section>
 
   <section class="panel">
-    <h2>表进度</h2>
+    <h2 data-i18n="tablesTitle">Table progress</h2>
     <table>
       <thead>
-        <tr><th>表名</th><th>状态</th><th class="num">已迁移</th><th class="num">总数</th>
-            <th class="num">错误</th><th style="width:26%">进度</th></tr>
+        <tr><th data-i18n="tableName">Table</th><th data-i18n="status">Status</th>
+            <th class="num" data-i18n="done">Done</th><th class="num" data-i18n="total">Total</th>
+            <th class="num" data-i18n="errorsCol">Errors</th>
+            <th style="width:26%" data-i18n="progressCol">Progress</th></tr>
       </thead>
-      <tbody id="tables"><tr><td colspan="6" class="dim">等待数据…</td></tr></tbody>
+      <tbody id="tables"><tr><td colspan="6" class="dim" data-i18n="waitingData">waiting for data…</td></tr></tbody>
     </table>
   </section>
 
   <section class="panel">
-    <h2>事件流</h2>
+    <h2 data-i18n="eventsTitle">Event stream</h2>
     <div class="log" id="events"></div>
   </section>
 </main>
 
 <script>
-var lastDone = 0, lastT = 0, rps = 0;
+var I18N = {
+  zh: {
+    title: "mini-migrator · 迁移监控",
+    connecting: "连接中…", progress: "总进度", throughput: "吞吐",
+    elapsed: "已用时", batches: "批次", errors: "错误",
+    rows: "{done} / {total} 行", eta: "预计剩余 {v}", bytes: "{v} written",
+    verifyWaiting: "校验：等待中", verifyRunning: "校验：进行中…",
+    verifyPassed: "校验：通过 ✓", verifyFailed: "校验：失败 {n} 张表",
+    chartTitle: "实时吞吐（rows/s）", tablesTitle: "表进度", eventsTitle: "事件流",
+    tableName: "表名", status: "状态", done: "已迁移", total: "总数",
+    errorsCol: "错误", progressCol: "进度",
+    waitingData: "等待数据…", waitingSample: "等待采样…",
+    disconnected: "连接断开，重试中…",
+    statePending: "等待", stateRunning: "运行中", stateDone: "完成", stateFailed: "失败",
+    phaseIdle: "空闲", phaseConnecting: "连接中", phaseVerifying: "校验中",
+    phaseDone: "完成", phaseError: "错误"
+  },
+  en: {
+    title: "mini-migrator · Migration Monitor",
+    connecting: "connecting…", progress: "Progress", throughput: "Throughput",
+    elapsed: "Elapsed", batches: "Batches", errors: "Errors",
+    rows: "{done} / {total} rows", eta: "ETA {v}", bytes: "{v} written",
+    verifyWaiting: "verify: waiting", verifyRunning: "verify: running…",
+    verifyPassed: "verify: passed ✓", verifyFailed: "verify: failed ({n} tables)",
+    chartTitle: "Live throughput (rows/s)", tablesTitle: "Table progress",
+    eventsTitle: "Event stream", tableName: "Table", status: "Status",
+    done: "Done", total: "Total", errorsCol: "Errors", progressCol: "Progress",
+    waitingData: "waiting for data…", waitingSample: "waiting for samples…",
+    disconnected: "disconnected, retrying…",
+    statePending: "pending", stateRunning: "running", stateDone: "done", stateFailed: "failed",
+    phaseIdle: "idle", phaseConnecting: "connecting", phaseVerifying: "verifying",
+    phaseDone: "done", phaseError: "error"
+  },
+  ru: {
+    title: "mini-migrator · Мониторинг миграции",
+    connecting: "подключение…", progress: "Прогресс", throughput: "Пропускная способность",
+    elapsed: "Прошло времени", batches: "Пакеты", errors: "Ошибки",
+    rows: "{done} / {total} строк", eta: "Осталось {v}", bytes: "{v} записано",
+    verifyWaiting: "проверка: ожидание", verifyRunning: "проверка: выполняется…",
+    verifyPassed: "проверка: успешно ✓", verifyFailed: "проверка: ошибок таблиц: {n}",
+    chartTitle: "Текущая пропускная способность (строк/с)", tablesTitle: "Прогресс таблиц",
+    eventsTitle: "Поток событий", tableName: "Таблица", status: "Статус",
+    done: "Перенесено", total: "Всего", errorsCol: "Ошибки", progressCol: "Прогресс",
+    waitingData: "ожидание данных…", waitingSample: "ожидание замеров…",
+    disconnected: "соединение потеряно, повтор…",
+    statePending: "ожидание", stateRunning: "выполняется", stateDone: "готово", stateFailed: "ошибка",
+    phaseIdle: "ожидание", phaseConnecting: "подключение", phaseVerifying: "проверка",
+    phaseDone: "готово", phaseError: "ошибка"
+  }
+};
 
+var lang = localStorage.getItem('mm-lang') || (navigator.language || 'en').slice(0, 2);
+if (lang !== 'zh' && lang !== 'ru') lang = 'en';
+var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null;
+
+function t(k) {
+  return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k;
+}
+function tf(k, vars) {
+  var s = t(k);
+  for (var p in vars) s = s.replace('{' + p + '}', vars[p]);
+  return s;
+}
+function applyLang() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : (lang === 'ru' ? 'ru' : 'en');
+  document.title = t('title');
+  var nodes = document.querySelectorAll('[data-i18n]');
+  for (var i = 0; i < nodes.length; i++) nodes[i].textContent = t(nodes[i].getAttribute('data-i18n'));
+  document.getElementById('lang').value = lang;
+  if (lastStatus) renderStatus(lastStatus);
+  if (lastTables) renderTables(lastTables);
+  drawChart(lastSeries || []);
+}
+function setLang(v) {
+  lang = v;
+  localStorage.setItem('mm-lang', v);
+  applyLang();
+}
+
+var lastDone = 0, lastT = 0, rps = 0;
 function fmt(n){ return (n||0).toLocaleString('en-US'); }
 function fmtBytes(b){
   if(!b) return '0 B';
@@ -137,56 +224,74 @@ function fmtDur(s){
   if(s<3600) return Math.floor(s/60)+'m '+String(s%60).padStart(2,'0')+'s';
   return Math.floor(s/3600)+'h '+String(Math.floor((s%3600)/60)).padStart(2,'0')+'m';
 }
-
+function stateText(s){
+  if(s==='pending') return t('statePending');
+  if(s==='running') return t('stateRunning');
+  if(s==='done') return t('stateDone');
+  if(s==='failed') return t('stateFailed');
+  return s;
+}
+function phaseText(p){
+  if(!p) return t('phaseIdle');
+  if(p==='idle') return t('phaseIdle');
+  if(p==='connecting') return t('phaseConnecting');
+  if(p==='verifying') return t('phaseVerifying');
+  if(p==='done') return t('phaseDone');
+  if(p==='error') return t('phaseError');
+  return p;
+}
 function setPhase(s){
   var el=document.getElementById('phase');
-  el.textContent=s.phase||'idle';
+  el.textContent=phaseText(s.phase);
   el.className='badge';
   if(s.finished) el.className+=(s.errors>0?' err':' done');
   else if(s.running) el.className+=' run';
 }
-
 function renderStatus(s){
+  lastStatus = s;
   document.getElementById('pct').textContent=(s.percent||0).toFixed(1)+'%';
   document.getElementById('pctbar').style.width=Math.min(100,s.percent||0)+'%';
-  document.getElementById('rowsLine').textContent=fmt(s.rows_done)+' / '+fmt(s.rows_total)+' 行';
+  document.getElementById('rowsLine').textContent=tf('rows',{done:fmt(s.rows_done),total:fmt(s.rows_total)});
   document.getElementById('speed').textContent=fmt(Math.round(s.rows_per_sec||0));
   document.getElementById('elapsed').textContent=fmtDur(s.elapsed);
-  document.getElementById('etaLine').textContent='预计剩余 '+(s.running?fmtDur(s.eta):'—');
+  document.getElementById('etaLine').textContent=tf('eta',{v:(s.running?fmtDur(s.eta):'—')});
   document.getElementById('batches').textContent=fmt(s.batches);
-  document.getElementById('bytesLine').textContent=fmtBytes(s.bytes)+' written';
+  document.getElementById('bytesLine').textContent=tf('bytes',{v:fmtBytes(s.bytes)});
   var er=document.getElementById('errors');
   er.textContent=fmt(s.errors);
   er.style.color=(s.errors>0?'var(--bad)':'var(--ok)');
   var v=s.verify||{};
   var vl=document.getElementById('verifyLine');
-  if(v.running) vl.textContent='校验：进行中…';
-  else if(v.done) vl.textContent='校验：'+(v.mismatch>0?('失败 '+v.mismatch+' 张表'):'通过 ✓');
-  else vl.textContent='校验：等待中';
+  if(v.running) vl.textContent=t('verifyRunning');
+  else if(v.done) vl.textContent=(v.mismatch>0?tf('verifyFailed',{n:v.mismatch}):t('verifyPassed'));
+  else vl.textContent=t('verifyWaiting');
   document.getElementById('meta').textContent=
     (s.mode||'')+' · '+(s.source||'')+' → '+(s.target||'');
   setPhase(s);
 }
-
 function renderTables(list){
+  lastTables = list;
   var tb=document.getElementById('tables');
-  if(!list||!list.length){ tb.innerHTML='<tr><td colspan="6" class="dim">等待数据…</td></tr>'; return; }
+  if(!list||!list.length){
+    tb.innerHTML='<tr><td colspan="6" class="dim">'+t('waitingData')+'</td></tr>';
+    return;
+  }
   var html='';
   for(var i=0;i<list.length;i++){
-    var t=list[i];
+    var x=list[i];
     html+='<tr>'+
-      '<td>'+t.name+'</td>'+
-      '<td><span class="tag '+t.state+'">'+t.state+'</span></td>'+
-      '<td class="num">'+fmt(t.done)+'</td>'+
-      '<td class="num">'+fmt(t.total)+'</td>'+
-      '<td class="num" style="color:'+(t.errors>0?'var(--bad)':'var(--dim)')+'">'+fmt(t.errors)+'</td>'+
-      '<td><div class="mini"><i style="width:'+Math.min(100,t.percent||0).toFixed(1)+'%"></i></div></td>'+
+      '<td>'+x.name+'</td>'+
+      '<td><span class="tag '+x.state+'">'+stateText(x.state)+'</span></td>'+
+      '<td class="num">'+fmt(x.done)+'</td>'+
+      '<td class="num">'+fmt(x.total)+'</td>'+
+      '<td class="num" style="color:'+(x.errors>0?'var(--bad)':'var(--dim)')+'">'+fmt(x.errors)+'</td>'+
+      '<td><div class="mini"><i style="width:'+Math.min(100,x.percent||0).toFixed(1)+'%"></i></div></td>'+
       '</tr>';
   }
   tb.innerHTML=html;
 }
-
 function renderEvents(list){
+  lastEvents = list;
   var box=document.getElementById('events');
   if(!list||!list.length) return;
   var html='';
@@ -201,8 +306,8 @@ function renderEvents(list){
   box.innerHTML=html;
   if(atBottom) box.scrollTop=box.scrollHeight;
 }
-
 function drawChart(series){
+  lastSeries = series;
   var cv=document.getElementById('chart');
   var dpr=window.devicePixelRatio||1;
   var w=cv.clientWidth, h=180;
@@ -210,16 +315,13 @@ function drawChart(series){
   var g=cv.getContext('2d');
   g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,w,h);
-
   g.strokeStyle='#1b2740'; g.lineWidth=1;
   for(var i=0;i<=4;i++){ var y=10+(h-30)*i/4;
     g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
-
   if(!series||series.length<2){
     g.fillStyle='#8b9bb4'; g.font='12px ui-monospace,Menlo,monospace';
-    g.fillText('等待采样…',10,20); return;
+    g.fillText(t('waitingSample'),10,20); return;
   }
-
   var pts=[];
   for(var j=1;j<series.length;j++){
     var dt=series[j][0]-series[j-1][0];
@@ -229,7 +331,6 @@ function drawChart(series){
   var max=1;
   for(var k=0;k<pts.length;k++) if(pts[k]>max) max=pts[k];
   max*=1.15;
-
   var pad=10, W=w, H=h-30;
   g.beginPath();
   for(var p=0;p<pts.length;p++){
@@ -238,39 +339,33 @@ function drawChart(series){
     if(p===0) g.moveTo(x,yy); else g.lineTo(x,yy);
   }
   g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.stroke();
-
   g.lineTo(pad+W-2*pad,10+H); g.lineTo(pad,10+H); g.closePath();
   var grad=g.createLinearGradient(0,0,0,10+H);
   grad.addColorStop(0,'rgba(76,201,240,.28)');
   grad.addColorStop(1,'rgba(76,201,240,0)');
   g.fillStyle=grad; g.fill();
-
   g.fillStyle='#8b9bb4'; g.font='11px ui-monospace,Menlo,monospace';
   g.fillText(Math.round(max)+' r/s', pad, 14);
 }
-
 async function tick(){
   try{
     var rs=await fetch('/api/status',{cache:'no-store'});
     var s=await rs.json();
     renderStatus(s);
-
     var rt=await fetch('/api/tables',{cache:'no-store'});
     renderTables(await rt.json());
-
     var re=await fetch('/api/events',{cache:'no-store'});
     renderEvents(await re.json());
-
     var rq=await fetch('/api/series',{cache:'no-store'});
     drawChart(await rq.json());
   }catch(e){
-    document.getElementById('meta').textContent='连接断开，重试中…';
+    document.getElementById('meta').textContent=t('disconnected');
   }
 }
-
+applyLang();
 tick();
 setInterval(tick, 600);
-window.addEventListener('resize', function(){ drawChart([]); });
+window.addEventListener('resize', function(){ drawChart(lastSeries||[]); });
 </script>
 </body>
 </html>

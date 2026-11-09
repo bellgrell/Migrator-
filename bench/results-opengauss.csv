@@ -1,5 +1,0 @@
-case,mode,rows,time_s,rows_per_s,verify,errors
-mysql2og,mysql2og,7110000,15.43 s,460836,PASS,0
-pg2og,pg2og,5110000,19.32 s,264441,PASS,0
-og2pg,og2pg,5110000,17.39 s,293923,PASS,0
-og2mysql,og2mysql,5110000,23.57 s,216776,PASS,0

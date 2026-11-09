@@ -1,132 +1,152 @@
 # mini-migrator
 
-面向国产数据库的**异构数据迁移工具**：MySQL → PostgreSQL / openGauss。
+A C++17 heterogeneous data migration tool for **MySQL, PostgreSQL and openGauss**. It supports full-load migration in multiple directions, row-count and checksum verification, and CDC (change data capture) from MySQL binlog to PostgreSQL/openGauss.
 
-C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（CDC）**。
+The built-in web dashboard supports **Chinese / English / Russian** and can be switched in the top-right corner.
 
-## 亮点
+## Supported directions
 
-| 能力 | 实测结果 |
-|---|---|
-| 全量迁移（COPY 协议） | 1000 万行 / 8 表 / 9.32s → **107 万 rows/s** |
-| 表级策略 | copy / rebuild / skip |
-| 二级索引迁移 | 唯一 / 普通索引，跨表重名自动处理 |
-| BLOB 二进制 | 字节级一致（含 NUL） |
-| 视图迁移 | MySQL VIEW → PostgreSQL VIEW（基础方言转换） |
-| 校验 | 行数 + checksum，可检出单行篡改 |
-| CDC 增量 | 增 / 改 / 删实时同步，含负数 DECIMAL；openGauss 6.0.0 实测 |
-| CDC 轮转 | binlog 跨文件自动跟随 |
-| CDC DDL | ALTER / CREATE / DROP 基础转换后执行 |
-| 监控 | Web 面板 + Qt 6 桌面版 |
-| openGauss | `--mode mysql2og`，6.0.0 实测：511 万行 11.33s / 451k rows/s |
-| 多方向 | `pg2mysql` / `pg2og` / `og2pg` / `og2mysql` / `mysql2mysql`，均实测 verify PASS |
-| 压力测试 | 7 条路径 × 511 万行全部 verify PASS；最高 MySQL→openGauss 485k rows/s |
-| MySQL 目标 | `LOAD DATA LOCAL INFILE`；openGauss→MySQL 5M 行 225k rows/s，4 线程后扩展放缓 |
+| Mode | Source | Target | Status |
+|---|---|---|---|
+| `mysql2pg` | MySQL | PostgreSQL | Full load + verification |
+| `mysql2og` | MySQL | openGauss | Full load + verification |
+| `pg2mysql` | PostgreSQL | MySQL | Full load + verification |
+| `pg2og` | PostgreSQL | openGauss | Full load + verification |
+| `og2pg` | openGauss | PostgreSQL | Full load + verification |
+| `og2mysql` | openGauss | MySQL | Full load + verification |
+| `mysql2mysql` | MySQL | MySQL | Full load + verification |
 
-## 快速开始
+CDC is currently available only with a MySQL source (MySQL binlog).
 
-    git clone <repo> && cd mini-migrator
-    make
+## Build
 
-    # 模拟运行（不需要数据库，可看面板效果）
-    ./build/migrator --mode sim --rows 600000 --tables 6 --throttle 200
+Requirements: C++17 compiler, libmysqlclient, libpq.
 
-    # 全量迁移 MySQL -> PostgreSQL
-    ./build/migrator --mode mysql2pg \
-      --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
-      --target 'host=127.0.0.1;port=5432;user=postgres;db=demo_dst' \
-      --batch 2000 --workers 4 --with-views
+```bash
+make
+./build/migrator --help
+```
 
-    # PostgreSQL -> MySQL
-    ./build/migrator --mode pg2mysql \
-      --source 'host=127.0.0.1;port=5432;user=postgres;db=demo' \
-      --target 'host=127.0.0.1;port=3306;user=root;db=demo_mysql' \
-      --batch 1000 --workers 4
+On macOS:
 
-    # 全量迁移 MySQL -> openGauss（目标库用 PG 兼容模式，认证见 docs/usage.md §16）
-    ./build/migrator --mode mysql2og \
-      --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
-      --target 'host=127.0.0.1;port=5432;user=gaussdb;password=***;db=og_dst' \
-      --batch 2000 --workers 4
+```bash
+brew install mysql-client libpq
+make
+```
 
-    # 全量 + 持续增量 + DDL 同步
-    ./build/migrator --mode mysql2pg ... --cdc --cdc-ddl
+CMake is also supported:
 
-    # 只跑增量（目标库已就绪）
-    ./build/migrator --mode mysql2pg ... --cdc-only --cdc-ddl
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
 
-面板：http://127.0.0.1:8123/
+## Quick start
 
-完整参数见 `./build/migrator --help` 或 [docs/usage.md](docs/usage.md)。
+MySQL to PostgreSQL:
 
-## 目录结构
+```bash
+./build/migrator --mode mysql2pg \
+  --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
+  --target 'host=127.0.0.1;port=5432;user=postgres;db=demo_dst' \
+  --batch 2000 --workers 4 --exit
+```
 
-    src/
-      migrator.h            核心类型 / 接口 / Options / Metrics
-      core.cpp              错误码、值序列化、类型映射、DDL 生成
-      metrics.cpp           指标采集 + JSON 输出
-      pipeline.cpp          全量迁移流水线 + 校验
-      policy.cpp            表级策略 + 索引 DDL
-      views.cpp             视图方言转换
-      checksum.cpp          FNV-1a 校验和
-      cdc.cpp / cdc.h       binlog 解析 + 增量应用
-      backend_mysql.cpp     MySQL 源（libmysqlclient）
-      backend_pg.cpp        PostgreSQL 目标（libpq，COPY/INSERT）
-      backend_pg_source.cpp PostgreSQL 源（校验用）
-      backend_sim.cpp       模拟后端
-      backends.cpp          工厂
-      http.cpp              内置 HTTP 服务（POSIX / Winsock）
-      main.cpp              CLI
-    qt/                     Qt 6 桌面版（qmake 工程）
-    web/index.html          监控面板（单文件，无 CDN）
-    config/                 type_map.json / tables.json / migrator.ini
-    docs/                   usage.md / PROJECT-STATE.md / plan.md
-    bench/stress.sh         压测脚本
+MySQL to openGauss:
 
-## 设计要点
+```bash
+# create the target database in PG-compatible mode first
+# CREATE DATABASE demo_dst WITH ENCODING='UTF8' DBCOMPATIBILITY='PG';
 
-**1. 两级类型映射**（`config/type_map.json`）
+./build/migrator --mode mysql2og \
+  --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
+  --target 'host=127.0.0.1;port=15432;user=gaussdb;db=demo_dst' \
+  --batch 2000 --workers 4 --exit
+```
 
-    全局：mysql_type -> target_type（支持 {args} 参数替换）
-    列级：schema.table.column 的特殊覆盖
+PostgreSQL to MySQL:
 
-**2. 读一批、写一批**
+```bash
+# target MySQL requires local_infile=ON for bulk load
+# SET GLOBAL local_infile=1;
 
-    游标流式读 -> FetchBatch(N) -> COPY/多行 INSERT -> 定期 COMMIT
+./build/migrator --mode pg2mysql \
+  --source 'host=127.0.0.1;port=5432;user=postgres;db=demo' \
+  --target 'host=127.0.0.1;port=3306;user=root;db=demo_mysql' \
+  --batch 2000 --workers 4 --exit
+```
 
-**3. 表级策略**（`config/tables.json`）
+The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to exit after migration, otherwise the process keeps serving the dashboard.
 
-    { "tables": { "daily_stats": "rebuild:sql/daily_stats.sql", "tmp": "skip" } }
+## Basic parameters
 
-**4. CDC**
+| Parameter | Default | Description |
+|---|---|---|
+| `--mode` | `sim` | Migration mode (see table above) |
+| `--source` | — | Source DSN |
+| `--target` | — | Target DSN |
+| `--batch` | 1000 | Rows per batch |
+| `--commit` | 10 | Commit every N batches |
+| `--workers` | 1 | Parallel workers (table-level and single-table PK ranges) |
+| `--port` | 8123 | Web dashboard port |
+| `--no-verify` | off | Skip row-count and checksum verification |
+| `--no-checksum` | off | Compare row counts only |
+| `--with-views` | off | Migrate views (MySQL to PG/openGauss) |
+| `--cdc` | off | Continue with CDC after full load |
+| `--cdc-only` | off | Run CDC only |
+| `--cdc-ddl` | off | Apply DDL changes from binlog |
+| `--exit` | off | Exit after migration |
 
-    binlog(ROW) -> TABLE_MAP/ROWS 事件 -> 主键 UPSERT / DELETE
-    位点保存在 out/cdc-position.txt，重启续传
+DSN format: `host=...;port=...;user=...;password=...;db=...`.
 
-## 构建（跨平台）
+## Performance
 
-    # macOS / Linux
-    make
+Dataset used for the measurements below: 5,110,000 rows in three tables (5,000,000 with an integer primary key, 100,000 with a composite key, 10,000 without a key). Batch size 2000, 4 workers, row-count and checksum verification enabled. Timing includes verification.
 
-    # 通用
-    cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+| Direction | Rows | Time | Throughput |
+|---|---:|---:|---:|
+| MySQL → openGauss | 7,110,000 | 15.43 s | 460,836 rows/s |
+| MySQL → PostgreSQL | 5,110,000 | 12.42 s | 411,287 rows/s |
+| MySQL → MySQL | 5,110,000 | 13.31 s | 384,006 rows/s |
+| openGauss → PostgreSQL | 5,110,000 | 17.39 s | 293,923 rows/s |
+| PostgreSQL → openGauss | 5,110,000 | 19.32 s | 264,441 rows/s |
+| openGauss → MySQL | 5,110,000 | 23.57 s | 216,776 rows/s |
+| PostgreSQL → MySQL | 5,110,000 | 27.52 s | 185,680 rows/s |
 
-依赖：libmysqlclient、libpq（可选，缺失时对应后端不编译）。
+The MySQL → openGauss run used a source database that also contained two temporary 1,000,000-row benchmark tables, hence 7,110,000 rows.
 
-## 已知限制
+Typical table-level results with the same dataset:
 
-- CDC 需要主键；无主键表跳过
-- 不支持 BIT / ENUM / SET / GEOMETRY 列
-- DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
-- DM8 未实现；openGauss 未实测（走 PG 协议）
-- 目标表需为空或已对齐（直接重跑会撞主键）
+| Table | Rows | Notes |
+|---|---:|---|
+| `big` | 5,000,000 | Integer primary key, range-parallel |
+| `comp` | 100,000 | Composite primary key |
+| `nopk` | 10,000 | No primary key |
+| `users` | 100,000 | Secondary indexes, text and decimal columns |
 
-## 相关文档
+## Limitations
 
-- [docs/usage.md](docs/usage.md) — 完整使用说明（15 章）
-- [docs/PROJECT-STATE.md](docs/PROJECT-STATE.md) — 交接文档（架构 / 13 个坑 / 待办）
-- [docs/plan.md](docs/plan.md) — 阶段计划
+- CDC requires a primary key; tables without a primary key are skipped.
+- CDC supports only a MySQL source (binlog ROW events).
+- Unsupported column types: BIT, ENUM, SET, GEOMETRY.
+- DDL dialect conversion is limited; complex MySQL-specific DDL may need manual rewriting.
+- DM8 is not implemented.
+- PostgreSQL → MySQL view migration is not implemented yet.
+- Target tables should be empty or already aligned; re-running into a non-empty table will hit primary-key conflicts.
+- PostgreSQL/openGauss sources currently use a single sequential cursor; single-table range parallelism is implemented for MySQL sources only.
+- MySQL target bulk load uses `LOAD DATA LOCAL INFILE`; the server must have `local_infile=ON`. Tables with binary columns automatically fall back to batched INSERT.
+- openGauss target databases should be created with `DBCOMPATIBILITY='PG'`; if the account uses sha256 authentication, native libpq may require switching the migration account to md5.
 
-## 参考项目
+## Web dashboard
 
-pgloader（类型映射）、DataX/Addax（插件化）、Debezium（CDC）、sqlines（两级映射表）。
+The dashboard shows progress, throughput, per-table status, verification result and the event stream. It supports three UI languages:
+
+- 中文
+- English
+- Русский
+
+The language selection is stored in the browser (localStorage).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
