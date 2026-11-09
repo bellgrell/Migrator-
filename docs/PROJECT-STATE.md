@@ -1,7 +1,5 @@
 # 项目交接文档（PROJECT-STATE）
 
-> 目的：上下文压缩或新会话时，读这一份就能接着干。
-
 ## 1. 项目是什么
 
 C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/openGauss，
