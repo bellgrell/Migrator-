@@ -25,7 +25,9 @@ void usage() {
       "  --target <dsn>                目标库 DSN\n"
       "  --batch <N>                   每批行数（默认 1000）\n"
       "  --commit <N>                  每 N 批提交（默认 10）\n"
-      "  --workers <N>                 并行线程数（默认 1，按表并行）\n"
+      "  --workers <N>                 并行线程数（默认 1；大表单表按主键区间并行）\n"
+      "  --pk-min-rows <N>             触发表内主键并行的最小行数（默认 1000000）\n"
+      "  --no-pk-parallel              关闭单表主键区间并行\n"
       "  --log-every <N>               每 N 批记一条日志（默认 10）\n"
       "  --out-dir <path>              日志目录（默认 out）\n"
       "  --throttle <ms>               每批休眠毫秒（默认 0）\n"
@@ -89,6 +91,8 @@ int main(int argc, char** argv) {
     else if (a == "--batch") o.batch_size = std::stoi(next());
     else if (a == "--commit") o.commit_every = std::stoi(next());
     else if (a == "--workers") o.workers = std::stoi(next());
+    else if (a == "--pk-min-rows") o.pk_min_rows = std::stoi(next());
+    else if (a == "--no-pk-parallel") o.pk_parallel = false;
     else if (a == "--log-every") o.log_every = std::stoi(next());
     else if (a == "--out-dir") o.out_dir = next();
     else if (a == "--throttle") o.throttle_ms = std::stoi(next());

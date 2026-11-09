@@ -53,6 +53,8 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 | 1000 万行 / 8 表 / 4 线程 / COPY | 9.32s → **1,072,691 rows/s**，verify PASS |
 | 同数据 INSERT 模式 | 18.84s → 530,747 rows/s |
 | 单表 10 万行 | 0.42s → 240k rows/s |
+| 单表 500 万行（顺序） | 迁移 4.88s → 1.05M rows/s，verify PASS |
+| 单表 500 万行（主键 8 区间） | 迁移 4.06s → **1.38M rows/s**，verify PASS |
 | CDC 增删改 | 实时同步，含负数 DECIMAL |
 | CDC DDL | ADD COLUMN 自动同步 |
 
@@ -71,6 +73,11 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 11. **QUERY 事件提前 return 前必须设 has_event**，否则事件被丢弃。
 12. **工具写入含敏感词（password/token）的代码时可能被脱敏成星号**：改用变量拼接。
 13. **字符串字面量 + char 是指针运算**：必须 std::string(...) + ch。
+14. **区间并行建表后必须 COMMIT**：子线程用各自新连接，未提交的 CREATE TABLE 它们看不见。
+15. **小表别开区间并行**：1M 行以下线程/连接开销大于收益，默认阈值 1,000,000 行；
+    2M 行基本持平，5M 行约快 17%。
+16. **区间边界用闭区间 + 数值均分**：`min + (max-min)*i/parts`，空区间直接跳过；
+    只对单列整数主键生效，复合主键/无主键自动回退顺序迁移。
 
 ## 6. 已知限制
 
@@ -79,11 +86,13 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 - DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
 - DM8 未实现；openGauss 未实测（走 PG 协议）
 - 目标表需为空或已对齐（重跑会撞主键）
+- 表内并行仅支持单列整数主键（tinyint/smallint/mediumint/int/bigint）；
+  复合主键、无主键、非整数主键回退表级/顺序并行
 
 ## 7. 待办（按优先级）
 
 1. DM8 适配（类型映射 + dmfldr）
 2. openGauss 实测（Docker）
 3. 根目录 README 更新（现有版本过时）
-4. 单表主键区间并行（突破按表并行的限制）
+4. ~~单表主键区间并行~~（已完成：`--workers` + 单列整数主键，5M 行 1.05M → 1.38M rows/s）
 5. CDC 事件批量应用（现在逐条 SQL，高写入量会延迟）

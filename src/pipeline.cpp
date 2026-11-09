@@ -100,6 +100,20 @@ void export_log(Metrics& m, const std::string& dir) {
   while (m.events.size() > 500) m.events.pop_front();
 }
 
+bool is_int_type(const std::string& t) {
+  return t.rfind("tinyint", 0) == 0 || t.rfind("smallint", 0) == 0 ||
+         t.rfind("mediumint", 0) == 0 || t.rfind("int", 0) == 0 ||
+         t.rfind("bigint", 0) == 0;
+}
+
+const ColumnDef* single_int_pk(const TableSchema& s) {
+  if (s.primary_key.size() != 1) return nullptr;
+  for (const auto& c : s.columns) {
+    if (c.name == s.primary_key[0] && is_int_type(c.src_type)) return &c;
+  }
+  return nullptr;
+}
+
 bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tgt,
                 Metrics& m) {
   auto tmet = find_metric(m, job.name);
@@ -224,6 +238,186 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
   tmet->finished_at = now_sec();
   m.log(std::string(failed ? "[fail] " : "ok ") + job.name + ": " +
         fmt_int(tmet->done.load()) + " rows");
+  return !failed;
+}
+
+bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
+                       ITarget& tgt, Metrics& m) {
+  auto tmet = find_metric(m, job.name);
+  if (!tmet) return false;
+
+  const ColumnDef* pk = single_int_pk(job.schema);
+  if (!pk) return copy_table(o, job, src, tgt, m);
+
+  int64_t lo = 0, hi = 0;
+  Status bs = src.pk_bounds(job.name, pk->name, lo, hi);
+  if (!bs.ok()) {
+    m.log("[warn] pk range " + job.name + ": " + bs.str() + " -> sequential");
+    return copy_table(o, job, src, tgt, m);
+  }
+
+  const int parts = std::max(2, o.workers);
+  tmet->state = 1;
+  tmet->started_at = now_sec();
+  m.log("=== table " + job.name + " (" + fmt_int(job.rows) +
+        " rows) pk-range parallel: " + std::to_string(parts) + " parts [" +
+        std::to_string(lo) + ", " + std::to_string(hi) + "] on " + pk->name);
+  m.log("DDL for " + job.name + ":\n" + job.ddl);
+
+  Status st = tgt.create_table(job.schema, job.ddl);
+  if (!st.ok()) {
+    m.log("[error] create_table " + job.name + ": " + st.str());
+    tmet->state = 3;
+    m.errors += 1;
+    tgt.rollback();
+    return false;
+  }
+  // 建表必须提交，区间线程各自的新连接才能看到目标表
+  st = tgt.commit();
+  if (!st.ok()) {
+    m.log("[error] commit after create " + job.name + ": " + st.str());
+    tmet->state = 3;
+    m.errors += 1;
+    return false;
+  }
+
+  std::vector<int64_t> b((size_t)parts + 1);
+  b[0] = lo;
+  b[(size_t)parts] = hi;
+  const long double span = (long double)hi - (long double)lo;
+  for (int i = 1; i < parts; ++i) {
+    b[(size_t)i] = lo + (int64_t)(span * i / parts);
+    if (b[(size_t)i] <= b[(size_t)i - 1]) b[(size_t)i] = b[(size_t)i - 1] + 1;
+  }
+  for (int i = 1; i <= parts; ++i) {
+    if (b[(size_t)i] < b[(size_t)i - 1]) b[(size_t)i] = b[(size_t)i - 1];
+  }
+
+  const int batch_size = o.batch_size > 0 ? o.batch_size : 1000;
+  const double t_start = now_sec();
+  std::atomic<int> failures{0};
+
+  std::vector<std::thread> threads;
+  for (int i = 0; i < parts; ++i) {
+    const int64_t a = b[(size_t)i];
+    const int64_t z = (i + 1 == parts) ? hi : b[(size_t)i + 1] - 1;
+    if (z < a) continue;
+    threads.emplace_back([&, i, a, z]() {
+      Status s2;
+      auto s = make_source(o, s2);
+      auto g = make_target(o, s2);
+      if (!s || !g) {
+        m.log("[error] range " + std::to_string(i) + " init: " + s2.str());
+        failures += 1;
+        m.errors += 1;
+        tmet->errors += 1;
+        return;
+      }
+      if (!s->connect().ok() || !g->connect().ok()) {
+        m.log("[error] range " + std::to_string(i) + " connect failed");
+        failures += 1;
+        m.errors += 1;
+        tmet->errors += 1;
+        return;
+      }
+      Status os = s->open_cursor_range(job.name, pk->name, a, z);
+      if (!os.ok()) {
+        m.log("[error] range " + std::to_string(i) + ": " + os.str());
+        failures += 1;
+        m.errors += 1;
+        tmet->errors += 1;
+        g->close();
+        return;
+      }
+
+      std::vector<Row> rows;
+      int batch = 0;
+      bool failed = false;
+      while (true) {
+        rows.clear();
+        Status fs = s->fetch_batch(batch_size, rows);
+        if (!fs.ok()) {
+          m.log("[error] fetch " + job.name + ": " + fs.str());
+          failed = true;
+          break;
+        }
+        if (rows.empty()) break;
+
+        Status ws = g->write_batch(job.name, rows);
+        if (!ws.ok()) {
+          m.log("[error] write " + job.name + ": " + ws.str());
+          failed = true;
+          break;
+        }
+
+        const int64_t n = (int64_t)rows.size();
+        tmet->done += n;
+        m.rows_done += n;
+        m.batches += 1;
+        for (auto& r : rows) {
+          for (auto& v : r) m.bytes_written += (int64_t)(v.s.size() + 12);
+        }
+        ++batch;
+
+        if (o.commit_every > 0 && batch % o.commit_every == 0) {
+          Status cs = g->commit();
+          if (!cs.ok()) {
+            m.log("[error] commit " + job.name + ": " + cs.str());
+            failed = true;
+            break;
+          }
+        }
+        if (batch % 10 == 0) m.sample();
+        if (o.throttle_ms > 0) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(o.throttle_ms));
+        }
+      }
+
+      if (!failed) {
+        Status cs = g->commit();
+        if (!cs.ok()) {
+          m.log("[error] final commit " + job.name + ": " + cs.str());
+          failed = true;
+        }
+      } else {
+        g->rollback();
+      }
+      s->close_cursor();
+      g->close();
+      if (failed) {
+        failures += 1;
+        m.errors += 1;
+        tmet->errors += 1;
+      }
+    });
+  }
+  for (auto& t : threads) t.join();
+
+  bool failed = failures.load() > 0;
+
+  if (!failed && o.build_indexes && !job.schema.indexes.empty()) {
+    int built = 0;
+    for (const auto& idx : job.schema.indexes) {
+      Status is = tgt.exec_sql(build_index_ddl(job.name, idx));
+      if (!is.ok()) {
+        m.log("[warn] index " + idx.name + ": " + is.str());
+      } else {
+        ++built;
+      }
+    }
+    m.log("indexes built for " + job.name + ": " + std::to_string(built) + "/" +
+          std::to_string(job.schema.indexes.size()));
+    Status cs = tgt.commit();
+    if (!cs.ok()) m.log("[warn] commit after indexes: " + cs.str());
+  }
+
+  tmet->state = failed ? 3 : 2;
+  tmet->finished_at = now_sec();
+  const double el = tmet->finished_at - t_start;
+  m.log(std::string(failed ? "[fail] " : "ok ") + job.name + ": " +
+        fmt_int(tmet->done.load()) + " rows in " + std::to_string((int)el) +
+        "s (" + std::to_string(el > 0.001 ? (int64_t)(tmet->done.load() / el) : 0) +
+        " rows/s)");
   return !failed;
 }
 
@@ -405,13 +599,32 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
   }
 
   if (!jobs.empty()) {
-    if (o.workers > 1 && jobs.size() > 1) {
-      run_parallel(o, jobs, m);
-    } else {
-      for (const auto& job : jobs) {
-        m.phase = "copying " + job.name;
-        copy_table(o, job, src, tgt, m);
+    int64_t total_rows = 0;
+    for (const auto& j : jobs) total_rows += j.rows;
+
+    std::vector<TableJob> plain;
+    std::vector<TableJob> ranged;
+    for (const auto& j : jobs) {
+      const bool big = o.pk_parallel && o.workers > 1 &&
+                       j.rows >= (int64_t)o.pk_min_rows &&
+                       single_int_pk(j.schema) != nullptr &&
+                       (jobs.size() == 1 || j.rows * 2 >= total_rows);
+      (big ? ranged : plain).push_back(j);
+    }
+
+    if (!plain.empty()) {
+      if (o.workers > 1 && plain.size() > 1) {
+        run_parallel(o, plain, m);
+      } else {
+        for (const auto& job : plain) {
+          m.phase = "copying " + job.name;
+          copy_table(o, job, src, tgt, m);
+        }
       }
+    }
+    for (const auto& job : ranged) {
+      m.phase = "copying " + job.name + " (pk ranges)";
+      copy_table_ranges(o, job, src, tgt, m);
     }
   }
 

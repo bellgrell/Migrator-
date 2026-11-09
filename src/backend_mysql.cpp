@@ -141,6 +141,41 @@ class MySqlSource : public ISource {
     return Status::OK();
   }
 
+  Status pk_bounds(const std::string& table, const std::string& column,
+                   int64_t& lo, int64_t& hi) override {
+    const std::string q = std::string("SELECT MIN(") + kBt + column + kBt +
+                          "), MAX(" + kBt + column + kBt + ") FROM " + kBt +
+                          table + kBt;
+    if (mysql_query(conn_, q.c_str())) return err("pk_bounds " + table);
+    MYSQL_RES* r = mysql_store_result(conn_);
+    if (!r) return err("pk_bounds result");
+    MYSQL_ROW row = mysql_fetch_row(r);
+    const bool empty = !row || !row[0] || !row[1];
+    if (!empty) {
+      lo = std::strtoll(row[0], nullptr, 10);
+      hi = std::strtoll(row[1], nullptr, 10);
+    }
+    mysql_free_result(r);
+    if (empty) return Status::Err(Code::kNotFound, "empty table: " + table);
+    return Status::OK();
+  }
+
+  Status open_cursor_range(const std::string& table, const std::string& column,
+                           int64_t lo, int64_t hi) override {
+    close_cursor();
+    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+                          " WHERE " + kBt + column + kBt + " >= " +
+                          std::to_string(lo) + " AND " + kBt + column + kBt +
+                          " <= " + std::to_string(hi) + " ORDER BY " + kBt +
+                          column + kBt;
+    if (mysql_query(conn_, q.c_str())) return err("SELECT range " + table);
+    res_ = mysql_use_result(conn_);
+    if (!res_) return err("use_result range");
+    fields_ = mysql_fetch_fields(res_);
+    nfields_ = mysql_num_fields(res_);
+    return Status::OK();
+  }
+
   Status fetch_batch(int n, std::vector<Row>& out) override {
     out.clear();
     if (!res_) return Status::OK();

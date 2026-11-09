@@ -85,6 +85,8 @@ struct Options {
   int commit_every = 10;
   int throttle_ms = 0;
   int workers = 1;
+  int pk_min_rows = 1000000;  // 单表主键区间并行阈值（小表顺序更快）
+  bool pk_parallel = true;   // 单表按主键区间并行
   int log_every = 10;
   int http_port = 8123;
   bool do_verify = true;
@@ -154,6 +156,18 @@ class ISource {
   virtual Status open_cursor(const std::string& table) = 0;
   virtual Status fetch_batch(int n, std::vector<Row>& out) = 0;
   virtual void close_cursor() = 0;
+  // 单表主键区间并行（可选能力，闭区间 [lo, hi]）
+  virtual Status pk_bounds(const std::string& table, const std::string& column,
+                           int64_t& lo, int64_t& hi) {
+    (void)table; (void)column; (void)lo; (void)hi;
+    return Status::Err(Code::kUnsupported, "pk range not supported");
+  }
+  virtual Status open_cursor_range(const std::string& table,
+                                   const std::string& column, int64_t lo,
+                                   int64_t hi) {
+    (void)table; (void)column; (void)lo; (void)hi;
+    return Status::Err(Code::kUnsupported, "pk range not supported");
+  }
   virtual int64_t total_rows(const std::string& table) = 0;
   virtual Status list_views(std::vector<std::string>& out) {
     out.clear();
