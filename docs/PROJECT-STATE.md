@@ -63,6 +63,7 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 | openGauss 6.0.0：demo 库 | 100,010 行 / 0.53s，checksum PASS |
 | openGauss 6.0.0：511 万行 | 11.33s → 451k rows/s（4 区间并行），checksum PASS |
 | openGauss 6.0.0：视图 | `v_user_stats` 迁移成功，verify PASS |
+| openGauss 6.0.0：CDC | INSERT/UPDATE/DELETE + DDL（ADD COLUMN）5 事件，0 错误，目标与源一致 |
 | CDC 增删改 | 实时同步，含负数 DECIMAL |
 | CDC DDL | ADD COLUMN 自动同步 |
 
@@ -86,6 +87,8 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
     2M 行基本持平，5M 行约快 17%。
 16. **区间边界用闭区间 + 数值均分**：`min + (max-min)*i/parts`，空区间直接跳过；
     只对单列整数主键生效，复合主键/无主键自动回退顺序迁移。
+17. **openGauss 不支持 ON CONFLICT**：CDC 更新要用 DELETE+INSERT；
+    binlog QUERY 事件尾部有 CRC32，解析要扣 4 字节；DDL 后必须清空 schema 缓存。
 
 ## 6. 已知限制
 
@@ -106,4 +109,4 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 2. ~~openGauss 实测~~（已完成：Docker 6.0.0，全量/区间/视图/checksum 均 PASS）
 3. 根目录 README 更新（现有版本过时）
 4. ~~单表主键区间并行~~（已完成：`--workers` + 单列整数主键，5M 行 1.05M → 1.38M rows/s）
-5. CDC 事件批量应用（现在逐条 SQL，高写入量会延迟）
+5. CDC 事件批量应用（现在逐条 SQL，高写入量会延迟；openGauss 增删改 + DDL 已实测）

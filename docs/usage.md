@@ -201,7 +201,8 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 ## 16. openGauss 对接
 
 > 已在 openGauss 6.0.0（Docker `enmotech/opengauss:latest`，aarch64）实测：
-> 10 万行迁移 + checksum PASS，511 万行 11.33s（451k rows/s）+ 区间并行 PASS，视图迁移 PASS。
+> 10 万行迁移 + checksum PASS，511 万行 11.33s（451k rows/s）+ 区间并行 PASS，视图迁移 PASS，
+> CDC 增/删/改 + DDL 同步 PASS（5 事件、0 错误）。
 
 模式：`--mode mysql2og`（MySQL → openGauss），`mysql2opengauss` 为别名；
 `--mode opengauss` 仅目标端。
@@ -238,6 +239,13 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 - 布尔值 COPY 输出改为 `true`/`false`，两边都兼容；
 - openGauss 的 numeric 默认输出 `.17`（省略前导 0），连接时设
   `behavior_compat_options='display_leading_zero'`，checksum 才不会假阳性。
+
+CDC 差异处理：
+
+- openGauss 不支持 `INSERT ... ON CONFLICT`，增量更新改为同一事务内
+  `DELETE` + `INSERT`（幂等）；
+- binlog QUERY 事件尾部带 CRC32，解析时已扣除，否则 DDL 末尾会多出垃圾字符；
+- DDL 执行后清空 schema 缓存，下个事件重新读列，避免新增列被静默丢弃。
 
 已知限制：openGauss 需要在目标库开启 PG 兼容模式；JDBC 驱动/ssl 认证等
 高级选项不在本工具范围内（只使用 libpq 基础能力）。

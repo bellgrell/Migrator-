@@ -194,6 +194,8 @@ class PgTarget : public ITarget {
     if (conn_) { PQfinish(conn_); conn_ = nullptr; }
   }
 
+  bool supports_upsert() const override { return !og_; }
+
   int64_t written(const std::string& table) override {
     std::lock_guard<std::mutex> lk(mu_);
     if (!conn_) return 0;

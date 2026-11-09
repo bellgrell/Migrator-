@@ -14,7 +14,7 @@ C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（
 | BLOB 二进制 | 字节级一致（含 NUL） |
 | 视图迁移 | MySQL VIEW → PostgreSQL VIEW（基础方言转换） |
 | 校验 | 行数 + checksum，可检出单行篡改 |
-| CDC 增量 | 增 / 改 / 删实时同步，含负数 DECIMAL |
+| CDC 增量 | 增 / 改 / 删实时同步，含负数 DECIMAL；openGauss 6.0.0 实测 |
 | CDC 轮转 | binlog 跨文件自动跟随 |
 | CDC DDL | ALTER / CREATE / DROP 基础转换后执行 |
 | 监控 | Web 面板 + Qt 6 桌面版 |

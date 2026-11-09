@@ -192,6 +192,8 @@ class ITarget {
   virtual void close() = 0;
   virtual int64_t written(const std::string& table) = 0;
   virtual void reset_counters() {}
+  // 是否支持 INSERT ... ON CONFLICT（openGauss 不支持）
+  virtual bool supports_upsert() const { return true; }
   virtual std::string describe() = 0;
 };
 

@@ -181,6 +181,20 @@ std::string strip_db_prefix(const std::string& q, const std::string& db);
 
 std::string convert_ddl(const std::string& q, const std::string& db) {
   std::string out = strip_db_prefix(q, db);
+  // MySQL binlog 的 DDL 常带 "use `db`;" 前缀，目标端不需要这条语句
+  {
+    std::string low = out;
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+    size_t p = 0;
+    while (p < low.size() && std::isspace((unsigned char)low[p])) ++p;
+    if (low.compare(p, 4, "use ") == 0) {
+      const size_t semi = out.find(';', p);
+      if (semi != std::string::npos) out = out.substr(semi + 1);
+    }
+    size_t s = 0;
+    while (s < out.size() && std::isspace((unsigned char)out[s])) ++s;
+    out = out.substr(s);
+  }
   const char bt = (char)96;
   for (char& c : out) {
     if (c == bt) c = '"';
@@ -311,6 +325,7 @@ struct BinlogReader::Impl {
   std::string src_db;
   MYSQL_RPL rpl{};
   bool opened = false;
+  size_t checksum_len = 0;  // CRC32 时事件尾部多 4 字节
 
   struct TableMap {
     std::string db;
@@ -368,6 +383,16 @@ Status BinlogReader::open(const Options& o, const std::string& file, uint64_t po
   // 复制客户端必须声明 checksum 处理方式，否则服务端拒绝发送事件
   mysql_query(impl_->conn, "SET @master_binlog_checksum='NONE'");
   mysql_query(impl_->conn, "SET @source_binlog_checksum='NONE'");
+
+  // 事件仍带 CRC32 尾巴，QUERY 事件解析要扣掉，否则 DDL 末尾多出垃圾字符
+  if (mysql_query(impl_->conn, "SHOW VARIABLES LIKE 'binlog_checksum'") == 0) {
+    MYSQL_RES* cr = mysql_store_result(impl_->conn);
+    if (cr) {
+      MYSQL_ROW row = mysql_fetch_row(cr);
+      if (row && row[1] && std::string(row[1]) == "CRC32") impl_->checksum_len = 4;
+      mysql_free_result(cr);
+    }
+  }
 
   if (mysql_binlog_open(impl_->conn, &impl_->rpl)) {
     return Status::Err(Code::kDb, std::string("mysql_binlog_open: ") + mysql_error(impl_->conn));
@@ -452,17 +477,19 @@ Status BinlogReader::next(bool& has_event, std::vector<CdcEvent>& events) {
 
   // ---------- QUERY：DDL ----------
   if (type == 2 && blen > 13) {
+    const size_t plen =
+        blen > impl_->checksum_len ? blen - impl_->checksum_len : blen;
     size_t p = 8;
     const uint8_t dblen = b[p++];
     p += 2;
     const uint16_t svlen = le16(b + p);
     p += 2 + svlen;
-    if (p + dblen + 1 > blen) return Status::OK();
+    if (p + dblen + 1 > plen) return Status::OK();
     std::string dbname((const char*)b + p, dblen);
     p += dblen + 1;
-    if (p >= blen) return Status::OK();
+    if (p >= plen) return Status::OK();
 
-    std::string query((const char*)b + p, blen - p);
+    std::string query((const char*)b + p, plen - p);
     if (std::getenv("MIG_CDC_DEBUG")) {
       std::fprintf(stderr, "[cdc-dbg] query db=%s sql=%.100s\n", dbname.c_str(),
                    query.c_str());
@@ -659,6 +686,11 @@ Status apply_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
 
   const Row& img = (ev.op == 2) ? ev.before : ev.after;
   if ((size_t)pk >= img.size()) return Status::Err(Code::kInvalid, "row image too short");
+  if (img.size() != s.columns.size())
+    return Status::Err(Code::kInvalid,
+                       "schema/row image column mismatch: schema=" +
+                           std::to_string(s.columns.size()) + " image=" +
+                           std::to_string(img.size()) + " (DDL 后需重读 schema)");
 
   const std::string pkname = s.columns[pk].name;
 
@@ -679,10 +711,17 @@ Status apply_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
     }
   }
 
-  std::string sql = "INSERT INTO \"" + s.name + "\" (" + cols + ") VALUES (" + vals +
-                    ") ON CONFLICT (\"" + pkname + "\")";
-  sql += sets.empty() ? " DO NOTHING" : (" DO UPDATE SET " + sets);
-  return tgt.exec_sql(sql);
+  const std::string ins = "INSERT INTO \"" + s.name + "\" (" + cols +
+                          ") VALUES (" + vals + ")";
+  if (tgt.supports_upsert()) {
+    std::string sql = ins + " ON CONFLICT (\"" + pkname + "\")";
+    sql += sets.empty() ? " DO NOTHING" : (" DO UPDATE SET " + sets);
+    return tgt.exec_sql(sql);
+  }
+  // openGauss 不支持 ON CONFLICT：同一事务里先删后插，语义等价且幂等
+  const std::string del = "DELETE FROM \"" + s.name + "\" WHERE \"" + pkname +
+                          "\" = " + img[pk].sql_literal() + ";";
+  return tgt.exec_sql(del + " " + ins + ";");
 }
 
 }  // namespace
@@ -750,10 +789,14 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
           Status ds = tgt->exec_sql(ev.ddl);
           if (ds.ok()) {
             m.log("ddl ok: " + ev.ddl.substr(0, 120));
-            schemas.erase(ev.table);
+            // DDL 可能新增/删除列，缓存 schema 全部失效，下个事件重新读
+            schemas.clear();
           } else {
             m.errors += 1;
             m.log("[error] ddl: " + ds.str() + " | " + ev.ddl.substr(0, 120));
+            if (std::getenv("MIG_CDC_DEBUG"))
+              std::fprintf(stderr, "[cdc-err] ddl: %s | %s\n", ds.str().c_str(),
+                           ev.ddl.substr(0, 200).c_str());
           }
         } else {
           m.log("[ddl] skipped (use --cdc-ddl): " + ev.ddl.substr(0, 100));
@@ -776,6 +819,9 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
       if (!as.ok()) {
         m.errors += 1;
         m.log("[error] cdc apply " + ev.table + ": " + as.str());
+        if (std::getenv("MIG_CDC_DEBUG"))
+          std::fprintf(stderr, "[cdc-err] apply %s: %s\n", ev.table.c_str(),
+                       as.str().c_str());
       } else {
         m.rows_done += 1;
         ++applied;
