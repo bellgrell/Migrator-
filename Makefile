@@ -53,7 +53,7 @@ CXXFLAGS += -DHAVE_PG -I$(PG_PREFIX)/include
 LDFLAGS  += -L$(PG_PREFIX)/lib -lpq
 endif
 
-.PHONY: all clean run
+.PHONY: all clean run lite full
 
 all: $(BIN)
 
@@ -72,3 +72,11 @@ clean:
 
 run: $(BIN)
 	./$(BIN) --mode sim --rows 200000 --tables 4 --port 8123
+
+# 只保留核心，不编译任何可选模块
+lite: clean
+	$(MAKE) WITH_PG_CDC=0 WITH_REPAIR=0 WITH_METRICS=0 WITH_SNAPSHOT=0 WITH_RESUME=0
+
+# 全部模块
+full: clean
+	$(MAKE) WITH_PG_CDC=1 WITH_REPAIR=1 WITH_METRICS=1 WITH_SNAPSHOT=1 WITH_RESUME=1

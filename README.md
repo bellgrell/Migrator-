@@ -58,6 +58,8 @@ cmake --build build -j
 
 The core binary still depends only on `libmysqlclient` and `libpq`.
 
+For a minimal build run `make lite` (core only); `make full` restores all modules. Compiled modules can also be disabled at runtime without rebuilding: `--disable-modules pg_cdc,repair,...`. The web dashboard only displays module status; toggling there would require a job-control UI.
+
 The web dashboard shows the compiled modules and their status. Module switches are build-time, so changing them requires a rebuild.
 
 ## Quick start

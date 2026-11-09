@@ -137,6 +137,10 @@ void handle(socket_t fd, Metrics& m) {
 #endif
     body += "}";
   } else if (path == "/metrics") {
+    if (!m.metrics_enabled.load()) {
+      code = 404;
+      body = "{\"error\":\"metrics module disabled\"}";
+    } else {
 #ifdef MIG_ENABLE_METRICS
     ctype = "text/plain; version=0.0.4; charset=utf-8";
     body = m.prometheus();
@@ -144,6 +148,7 @@ void handle(socket_t fd, Metrics& m) {
     code = 404;
     body = "{\"error\":\"metrics module not built\"}";
 #endif
+    }
   } else {
     code = 404;
     body = "{\"error\":\"not found\"}";

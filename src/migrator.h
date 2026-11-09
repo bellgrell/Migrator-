@@ -104,6 +104,13 @@ struct Options {
   std::string resume_dir = "out/resume";
   std::vector<std::string> only_tables;     // 仅迁移这些表
   std::vector<std::string> exclude_tables;  // 排除这些表
+  std::vector<std::string> disabled_modules;  // 运行时禁用的模块
+
+  bool module_enabled(const std::string& name) const {
+    for (const auto& m : disabled_modules)
+      if (m == name) return false;
+    return true;
+  }
   std::string snapshot_position_path = "out/snapshot-position.txt";
   int cdc_retries = 10;          // CDC 断线重连次数
   std::string cdc_slot = "migrator_slot";
@@ -147,6 +154,7 @@ struct Metrics {
   std::atomic<bool> running{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> verifying{false};
+  std::atomic<bool> metrics_enabled{true};
   std::atomic<bool> verified{false};
   std::atomic<int64_t> verify_mismatch{0};
   double started_at = 0.0;

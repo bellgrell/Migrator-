@@ -308,6 +308,8 @@ void save_position(const Options& o, const std::string& lsn) {
 }  // namespace
 
 Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
+  if (!o.module_enabled("pg_cdc"))
+    return Status::Err(Code::kUnsupported, "PG CDC module disabled");
   if (o.source_kind != "pg")
     return Status::Err(Code::kUnsupported, "PG CDC requires a PostgreSQL source");
   if (o.target_kind == "mysql")

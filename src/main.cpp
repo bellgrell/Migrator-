@@ -102,6 +102,7 @@ void usage() {
       "  --port <N>                    面板端口（默认 8123）\n"
       "  --only-tables <a,b,c>         只迁移指定表（逗号分隔）\n"
       "  --exclude-tables <a,b,c>      排除指定表\n"
+      "  --disable-modules <a,b,c>     运行时禁用模块（pg_cdc/repair/metrics/snapshot/resume）\n"
       "  --exit                        迁移完退出\n"
       "  --features                    显示编译进来的模块\n"
       "  -h, --help                    显示帮助\n");
@@ -199,10 +200,24 @@ int main(int argc, char** argv) {
     else if (a == "--cdc-slot") o.cdc_slot = next();
     else if (a == "--only-tables") o.only_tables = split_list(next());
     else if (a == "--exclude-tables") o.exclude_tables = split_list(next());
+    else if (a == "--disable-modules") o.disabled_modules = split_list(next());
     else if (a == "--exit") exit_after = true;
     else if (a == "--features") { print_features(); return 0; }
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
+  }
+
+  if (o.consistent_snapshot && !o.module_enabled("snapshot")) {
+    std::fprintf(stderr, "[fatal] snapshot module disabled\n");
+    return 2;
+  }
+  if (o.resume && !o.module_enabled("resume")) {
+    std::fprintf(stderr, "[fatal] resume module disabled\n");
+    return 2;
+  }
+  if (o.repair && !o.module_enabled("repair")) {
+    std::fprintf(stderr, "[fatal] repair module disabled\n");
+    return 2;
   }
 
 #ifndef MIG_ENABLE_SNAPSHOT
@@ -285,6 +300,7 @@ int main(int argc, char** argv) {
   auto* mheap = new mig::Metrics();
   mig::Metrics& m = *mheap;
   m.mode = o.mode;
+  m.metrics_enabled = o.module_enabled("metrics");
 
   std::printf("========================================\n");
   std::printf(" mini-migrator\n");

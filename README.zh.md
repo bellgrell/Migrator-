@@ -58,6 +58,8 @@ cmake --build build -j
 
 核心二进制仍然只依赖 `libmysqlclient` 和 `libpq`。
 
+最小构建可以直接 `make lite`（只保留核心），`make full` 恢复全部模块。已编译进来的模块还可以在运行时禁用，无需重新编译：`--disable-modules pg_cdc,repair,...`。Web 面板只显示模块状态；要在界面里切换需要任务控制面。
+
 Web 面板会显示已编译的模块及状态；模块是编译期开关，修改需要重新编译。
 
 ## 快速开始
