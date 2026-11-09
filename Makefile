@@ -1,7 +1,7 @@
 # mini-migrator build (portable-ish)
 
 CXX      ?= c++
-CXXFLAGS  = -std=c++17 -O2 -Wall -Wextra -Isrc -Iinclude -MMD -MP
+CXXFLAGS  = -std=c++17 -O2 -Wall -Wextra -Isrc -MMD -MP
 LDFLAGS   =
 SRCS      = $(wildcard src/*.cpp)
 OBJS      = $(patsubst src/%.cpp,build/%.o,$(SRCS))

@@ -13,7 +13,7 @@ add_library(migrator_core STATIC
   src/backends.cpp
   src/http.cpp
 )
-target_include_directories(migrator_core PUBLIC src include)
+target_include_directories(migrator_core PUBLIC src)
 
 find_package(Threads REQUIRED)
 target_link_libraries(migrator_core PUBLIC Threads::Threads)
