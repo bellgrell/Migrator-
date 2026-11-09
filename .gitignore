@@ -13,3 +13,11 @@ out/
 docs/
 bench/
 archive/
+
+# Qt build artifacts
+qt/Makefile
+qt/.qmake.stash
+qt/*.o
+qt/moc_*.cpp
+qt/migrator_gui.app/
+qt/build/
