@@ -1,0 +1,25 @@
+{
+  "global": {
+    "bigint": "bigint",
+    "integer": "int",
+    "smallint": "smallint",
+    "boolean": "tinyint(1)",
+    "character varying": "varchar{args}",
+    "character": "char{args}",
+    "text": "longtext",
+    "timestamp without time zone": "datetime(6)",
+    "timestamp with time zone": "datetime(6)",
+    "date": "date",
+    "time without time zone": "time(6)",
+    "time with time zone": "time(6)",
+    "numeric": "decimal{args}",
+    "decimal": "decimal{args}",
+    "real": "float",
+    "double precision": "double",
+    "bytea": "longblob",
+    "json": "json",
+    "jsonb": "json",
+    "uuid": "char(36)"
+  },
+  "columns": {}
+}

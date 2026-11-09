@@ -218,7 +218,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
   if (!failed && o.build_indexes && !job.schema.indexes.empty()) {
     int built = 0;
     for (const auto& idx : job.schema.indexes) {
-      Status is = tgt.exec_sql(build_index_ddl(job.name, idx));
+      Status is = tgt.exec_sql(tgt.index_ddl(job.name, idx));
       if (!is.ok()) {
         m.log("[warn] index " + idx.name + ": " + is.str());
       } else {
@@ -398,7 +398,7 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   if (!failed && o.build_indexes && !job.schema.indexes.empty()) {
     int built = 0;
     for (const auto& idx : job.schema.indexes) {
-      Status is = tgt.exec_sql(build_index_ddl(job.name, idx));
+      Status is = tgt.exec_sql(tgt.index_ddl(job.name, idx));
       if (!is.ok()) {
         m.log("[warn] index " + idx.name + ": " + is.str());
       } else {
@@ -464,8 +464,15 @@ bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
     }
     for (auto& c : job.schema.columns) {
       c.dst_type = tm.map_column(job.schema.name, c.name, c.src_type);
+      if (o.target_kind == "mysql") {
+        if (c.dst_type == "varchar") c.dst_type = "varchar(255)";
+        else if (c.dst_type == "char") c.dst_type = "char(1)";
+        else if (c.dst_type == "decimal" || c.dst_type == "numeric")
+          c.dst_type = "decimal(65,30)";
+      }
     }
-    job.ddl = build_ddl(job.schema);
+    job.ddl = (o.target_kind == "mysql") ? build_ddl_mysql(job.schema)
+                                          : build_ddl(job.schema);
     job.rows = src.total_rows(t);
     if (job.rows < 0) job.rows = 0;
     total += job.rows;
@@ -473,7 +480,7 @@ bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
   }
 
   // PostgreSQL 索引名在 schema 内唯一（MySQL 是每表唯一），跨表重名要加表名后缀
-  {
+  if (o.target_kind != "mysql") {
     std::unordered_map<std::string, int> name_count;
     for (const auto& j : jobs) {
       for (const auto& idx : j.schema.indexes) name_count[idx.name] += 1;
@@ -663,14 +670,16 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     m.phase = "analyzing";
     int okc = 0;
     for (const auto& job : jobs) {
-      Status as = tgt.exec_sql("ANALYZE \"" + job.name + "\";");
+      Status as = tgt.exec_sql(tgt.analyze_sql(job.name));
       if (as.ok()) ++okc;
     }
     m.log("analyze done: " + std::to_string(okc) + "/" +
           std::to_string(jobs.size()) + " tables");
   }
 
-  if (o.with_views) {
+  if (o.with_views && o.target_kind == "mysql") {
+    m.log("[warn] views: MySQL target not supported yet, skipped");
+  } else if (o.with_views) {
     std::vector<std::string> views;
     Status vs0 = src.list_views(views);
     if (!vs0.ok()) {
@@ -756,9 +765,16 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   // ---- checksum：内容级校验 ----
   if (o.checksum) {
     Status st;
-    auto dst = make_pg_source(o, st);
+    std::shared_ptr<ISource> dst;
+    if (o.target_kind == "mysql") {
+      Options vo = o;
+      vo.mysql_source_dsn = o.target;
+      dst = make_mysql_source(vo, st);
+    } else {
+      dst = make_pg_source(o, st);
+    }
     if (!dst) {
-      m.log("[warn] checksum skipped: cannot create pg source");
+      m.log("[warn] checksum skipped: cannot create verifier");
     } else if (!dst->connect().ok()) {
       m.log("[warn] checksum skipped: pg source connect failed");
     } else {

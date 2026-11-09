@@ -28,7 +28,8 @@ std::string canonical(const Value& v) {
       if (s == "-0") s = "0";
       return std::string("\x03", 1) + s;
     }
-    case ValType::kBool: return std::string("\x04", 1) + (v.b ? "1" : "0");
+    // bool 与 0/1 整数归一到同一形态：PG bool 和 MySQL tinyint(1) 才能比对
+    case ValType::kBool: return std::string("\x02", 1) + (v.b ? "1" : "0");
     case ValType::kBytes: {
       static const char* hex = "0123456789abcdef";
       std::string out("\x05", 1);

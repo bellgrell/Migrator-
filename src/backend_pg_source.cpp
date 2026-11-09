@@ -62,12 +62,14 @@ class PgSource : public ISource {
   ~PgSource() override { close(); }
 
   Status connect() override {
-    const std::string host = dsn_get(opts_.target, "host", "127.0.0.1");
-    const std::string port = dsn_get(opts_.target, "port", "5432");
-    const std::string user = dsn_get(opts_.target, "user", "postgres");
+    const std::string& dsn =
+        opts_.pg_source_uses_source ? opts_.source : opts_.target;
+    const std::string host = dsn_get(dsn, "host", "127.0.0.1");
+    const std::string port = dsn_get(dsn, "port", "5432");
+    const std::string user = dsn_get(dsn, "user", "postgres");
     const std::string pw_key = std::string("pass") + "word";
-    const std::string pw = dsn_get(opts_.target, pw_key, "");
-    const std::string db = dsn_get(opts_.target, "db", "postgres");
+    const std::string pw = dsn_get(dsn, pw_key, "");
+    const std::string db = dsn_get(dsn, "db", "postgres");
 
     conn_ = PQsetdbLogin(host.c_str(), port.c_str(), nullptr, nullptr,
                          db.c_str(), user.c_str(), pw.c_str());
@@ -107,9 +109,13 @@ class PgSource : public ISource {
   Status read_schema(const std::string& table, TableSchema& out) override {
     out = TableSchema();
     out.name = table;
+    std::string et;
+    for (char ch : table) { if (ch == '\'') et += "''"; else et += ch; }
     const std::string q =
-        "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-        "WHERE table_schema='public' AND table_name='" + table + "' ORDER BY ordinal_position";
+        "SELECT column_name, data_type, is_nullable, character_maximum_length, "
+        "numeric_precision, numeric_scale, udt_name "
+        "FROM information_schema.columns WHERE table_schema='public' AND table_name='" +
+        et + "' ORDER BY ordinal_position";
     PGresult* r = PQexec(conn_, q.c_str());
     if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
       if (r) PQclear(r);
@@ -118,12 +124,76 @@ class PgSource : public ISource {
     for (int i = 0; i < PQntuples(r); ++i) {
       ColumnDef c;
       c.name = PQgetvalue(r, i, 0);
-      c.src_type = PQgetvalue(r, i, 1);
-      c.dst_type = c.src_type;
+      std::string type = PQgetvalue(r, i, 1);
+      std::string low = type;
+      for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
+      if (!PQgetisnull(r, i, 3)) {
+        type += "(" + std::string(PQgetvalue(r, i, 3)) + ")";
+      } else if ((low == "numeric" || low == "decimal") && !PQgetisnull(r, i, 4)) {
+        type += "(" + std::string(PQgetvalue(r, i, 4));
+        if (!PQgetisnull(r, i, 5)) type += "," + std::string(PQgetvalue(r, i, 5));
+        type += ")";
+      }
+      c.src_type = type;
+      c.dst_type = type;
       c.nullable = std::strcmp(PQgetvalue(r, i, 2), "YES") == 0;
+      const std::string udt = PQgetvalue(r, i, 6);
+      c.binary = (udt == "bytea");
       out.columns.push_back(c);
     }
     PQclear(r);
+
+    // 主键
+    const std::string pkq =
+        "SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid=i.indrelid "
+        "AND a.attnum=ANY(i.indkey) WHERE i.indrelid='\"" + et + "\"'::regclass "
+        "AND i.indisprimary ORDER BY a.attnum";
+    PGresult* pr = PQexec(conn_, pkq.c_str());
+    if (pr && PQresultStatus(pr) == PGRES_TUPLES_OK) {
+      for (int i = 0; i < PQntuples(pr); ++i) {
+        const std::string col = PQgetvalue(pr, i, 0);
+        out.primary_key.push_back(col);
+        for (auto& c : out.columns) if (c.name == col) c.primary = true;
+      }
+    }
+    if (pr) PQclear(pr);
+
+    // 二级索引（简单列索引，跳过 pkey 与表达式索引）
+    const std::string iq =
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname='public' "
+        "AND tablename='" + et + "' ORDER BY indexname";
+    PGresult* ir = PQexec(conn_, iq.c_str());
+    if (ir && PQresultStatus(ir) == PGRES_TUPLES_OK) {
+      for (int i = 0; i < PQntuples(ir); ++i) {
+        const std::string name = PQgetvalue(ir, i, 0);
+        const std::string def = PQgetvalue(ir, i, 1);
+        if (name.size() >= 5 && name.substr(name.size() - 5) == "_pkey") continue;
+        const size_t lp = def.rfind('(');
+        const size_t rp = def.rfind(')');
+        if (lp == std::string::npos || rp == std::string::npos || rp <= lp) continue;
+        IndexDef idx;
+        idx.name = name;
+        idx.unique = def.find("CREATE UNIQUE INDEX") != std::string::npos;
+        std::string list = def.substr(lp + 1, rp - lp - 1);
+        std::string cur;
+        for (size_t k = 0; k <= list.size(); ++k) {
+          if (k == list.size() || list[k] == ',') {
+            size_t a = cur.find_first_not_of(" ");
+            size_t b = cur.find_last_not_of(" ");
+            if (a != std::string::npos) {
+              std::string col = cur.substr(a, b - a + 1);
+              const bool simple = col.find_first_of(" ()") == std::string::npos;
+              if (simple) idx.columns.push_back(col);
+            }
+            cur.clear();
+          } else {
+            cur.push_back(list[k]);
+          }
+        }
+        if (!idx.columns.empty()) out.indexes.push_back(idx);
+      }
+    }
+    if (ir) PQclear(ir);
     return Status::OK();
   }
 
@@ -204,9 +274,11 @@ class PgSource : public ISource {
 
   std::string describe() override {
     const std::string kind = server_is_og_ ? "openGauss" : "PostgreSQL";
-    return kind + " source (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
-           dsn_get(opts_.target, "port", "5432") + "/" +
-           dsn_get(opts_.target, "db", "postgres") + ")";
+    const std::string& dsn =
+        opts_.pg_source_uses_source ? opts_.source : opts_.target;
+    return kind + " source (" + dsn_get(dsn, "host", "127.0.0.1") + ":" +
+           dsn_get(dsn, "port", "5432") + "/" +
+           dsn_get(dsn, "db", "postgres") + ")";
   }
 
  private:

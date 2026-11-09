@@ -38,10 +38,14 @@
 | sim | 内置模拟 | 内置模拟 | 完整 |
 | mysql2pg | MySQL | PostgreSQL | 完整（推荐） |
 | mysql2og | MySQL | openGauss | 完整 |
-| mysql | MySQL | — | 仅源端 |
-| postgres | — | PostgreSQL | 仅目标端 |
-| opengauss | — | openGauss | 仅目标端 |
+| pg2mysql | PostgreSQL | MySQL | 完整（视图暂不支持） |
+| pg2og | PostgreSQL | openGauss | 完整 |
+| og2pg | openGauss | PostgreSQL | 完整 |
+| og2mysql | openGauss | MySQL | 完整（视图暂不支持） |
+| mysql2mysql | MySQL | MySQL | 完整 |
 | mysql2opengauss | MySQL | openGauss | mysql2og 的别名 |
+
+也可用 `--source-type` / `--target-type` 显式指定 `mysql|pg|og`，覆盖 mode。
 
 ## 4. 参数总表
 
@@ -54,6 +58,8 @@
 | --tables | 4 | 模拟表数（仅 sim） |
 | --batch | 1000 | 每批行数 |
 | --commit | 10 | 每 N 批提交 |
+| --source-type | 按 mode | 源类型：mysql/pg/og |
+| --target-type | 按 mode | 目标类型：mysql/pg/og |
 | --workers | 1 | 并行线程数（按表并行；大单表自动按主键区间并行） |
 | --pk-min-rows | 1000000 | 触发表内主键区间并行的最小行数 |
 | --no-pk-parallel | 关 | 关闭单表主键区间并行 |
@@ -113,7 +119,18 @@
 | rebuild | 不迁数据，迁移后执行指定 SQL 重建 |
 | skip | 完全跳过 |
 
-## 7. 类型映射（config/type_map.json）
+## 7. 类型映射（config/type_map*.json）
+
+按方向自动选择：
+
+| 方向 | 文件 |
+|---|---|
+| MySQL → PG/openGauss | config/type_map.json（默认） |
+| MySQL → MySQL | config/type_map.mysql.json |
+| PG/openGauss → PG/openGauss | config/type_map.pg.json |
+| PG/openGauss → MySQL | config/type_map.pg2mysql.json |
+
+`--type-map <path>` 可显式覆盖。
 
     {
       "global":  { "varchar": "varchar{args}", "datetime": "timestamp" },

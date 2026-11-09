@@ -79,6 +79,11 @@ struct Options {
   std::string mode = "sim";
   std::string source = "";
   std::string target = "";
+  // 源/目标类型：mysql | pg | og | sim（由 mode 推导，也可 --source-type/--target-type 覆盖）
+  std::string source_kind = "sim";
+  std::string target_kind = "sim";
+  bool pg_source_uses_source = false;  // PgSource 读 o.source（迁移源）而不是 o.target（校验源）
+  std::string mysql_source_dsn;        // 非空时 MySqlSource 用它（校验 MySQL 目标用）
   std::string type_map_path = "config/type_map.json";
   std::string table_policy_path = "config/tables.json";
   int batch_size = 1000;
@@ -180,6 +185,8 @@ class ISource {
   virtual std::string describe() = 0;
 };
 
+std::string build_index_ddl(const std::string& table, const IndexDef& idx);
+
 class ITarget {
  public:
   virtual ~ITarget() = default;
@@ -194,6 +201,13 @@ class ITarget {
   virtual void reset_counters() {}
   // 是否支持 INSERT ... ON CONFLICT（openGauss 不支持）
   virtual bool supports_upsert() const { return true; }
+  // 目标方言的索引 / ANALYZE 语句
+  virtual std::string index_ddl(const std::string& table, const IndexDef& idx) {
+    return build_index_ddl(table, idx);
+  }
+  virtual std::string analyze_sql(const std::string& table) {
+    return "ANALYZE \"" + table + "\";";
+  }
   virtual std::string describe() = 0;
 };
 
@@ -219,6 +233,7 @@ Status compute_checksum(ISource& src, const std::string& table, int batch,
 bool checksum_equal(const Checksum& a, const Checksum& b);
 
 std::string build_ddl(const TableSchema& s);
+std::string build_ddl_mysql(const TableSchema& s);
 std::string convert_view_sql(const std::string& mysql_sql);
 std::string build_index_ddl(const std::string& table, const IndexDef& idx);
 std::string json_escape(const std::string& s);

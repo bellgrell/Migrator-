@@ -20,6 +20,7 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
       cdc.cpp            binlog 解析 + 增量应用（最复杂）
       cdc.h
       backend_mysql.cpp  MySQL 源（libmysqlclient）
+      backend_mysql_target.cpp  MySQL 目标（INSERT 批量写）
       backend_pg.cpp     PostgreSQL 目标（libpq，COPY/INSERT）
       backend_pg_source.cpp  PostgreSQL 源（校验用，服务端游标）
       backend_sim.cpp    模拟后端
@@ -64,6 +65,10 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 | openGauss 6.0.0：511 万行 | 11.33s → 451k rows/s（4 区间并行），checksum PASS |
 | openGauss 6.0.0：视图 | `v_user_stats` 迁移成功，verify PASS |
 | openGauss 6.0.0：CDC | INSERT/UPDATE/DELETE + DDL（ADD COLUMN）5 事件，0 错误，目标与源一致 |
+| PG → openGauss | demo 库 100,010 行 / 0.59s，checksum PASS |
+| openGauss → PG | 5,110,000 行 / 15.71s，checksum PASS |
+| PG → MySQL | demo 库 100,010 行 / 1.30s，checksum PASS |
+| MySQL → MySQL | demo 库 100,013 行 / 1.00s，checksum PASS |
 | CDC 增删改 | 实时同步，含负数 DECIMAL |
 | CDC DDL | ADD COLUMN 自动同步 |
 
@@ -96,6 +101,8 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 - 不支持 BIT / ENUM / SET / GEOMETRY 列
 - DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
 - DM8 未实现
+- 目标端已支持 MySQL（backend_mysql_target）+ PG/openGauss；源端支持 MySQL / PG / openGauss
+- PG→MySQL 暂不支持视图；CDC 仍只支持 MySQL binlog 源
 - openGauss 走 PG 协议：mysql2og 模式，6.0.0 实测通过；
   库需 DBCOMPATIBILITY='PG'；numeric 需 display_leading_zero；
   若账号是 sha256 认证，原生 libpq 会报错，改用 md5

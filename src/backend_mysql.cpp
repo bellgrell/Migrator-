@@ -12,6 +12,16 @@ namespace {
 
 const char kBt = (char)96;  // MySQL 标识符引号
 
+// MySQL 的 DATETIME(6) 会输出 ".000000" / ".120000"，PG 会省略零小数部分，
+// 校验前统一裁掉末尾的 0，避免 checksum 假阳性
+std::string trim_fraction(std::string s) {
+  const size_t dot = s.find('.');
+  if (dot == std::string::npos) return s;
+  while (!s.empty() && s.back() == '0') s.pop_back();
+  if (!s.empty() && s.back() == '.') s.pop_back();
+  return s;
+}
+
 std::string dsn_get(const std::string& dsn, const std::string& key,
                     const std::string& def = "") {
   const std::string token = key + "=";
@@ -35,12 +45,13 @@ class MySqlSource : public ISource {
   Status connect() override {
     conn_ = mysql_init(nullptr);
     if (!conn_) return Status::Err(Code::kDb, "mysql_init failed");
-
-    const std::string host = dsn_get(opts_.source, "host", "127.0.0.1");
-    const std::string port = dsn_get(opts_.source, "port", "3306");
-    const std::string user = dsn_get(opts_.source, "user", "root");
-    const std::string pass = dsn_get(opts_.source, "password", "");
-    const std::string db = dsn_get(opts_.source, "db", "");
+    const std::string& dsn =
+        opts_.mysql_source_dsn.empty() ? opts_.source : opts_.mysql_source_dsn;
+    const std::string host = dsn_get(dsn, "host", "127.0.0.1");
+    const std::string port = dsn_get(dsn, "port", "3306");
+    const std::string user = dsn_get(dsn, "user", "root");
+    const std::string pass = dsn_get(dsn, "password", "");
+    const std::string db = dsn_get(dsn, "db", "");
 
     if (!mysql_real_connect(conn_, host.c_str(), user.c_str(), pass.c_str(),
                             db.empty() ? nullptr : db.c_str(),
@@ -212,6 +223,13 @@ class MySqlSource : public ISource {
               r.push_back(Value::Bytes(std::string(p, len)));
             else
               r.push_back(Value::Str(std::string(p, len)));
+            break;
+          case MYSQL_TYPE_DATETIME:
+          case MYSQL_TYPE_TIMESTAMP:
+            r.push_back(Value::Str(trim_fraction(std::string(p, len))));
+            break;
+          case MYSQL_TYPE_TIME:
+            r.push_back(Value::Str(trim_fraction(std::string(p, len))));
             break;
           default:
             r.push_back(Value::Str(std::string(p, len)));

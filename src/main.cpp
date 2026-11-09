@@ -20,8 +20,10 @@ void usage() {
       "                   --target \"host=127.0.0.1;port=5432;user=postgres;db=demo_dst\"\n"
       "\n"
       "迁移:\n"
-      "  --mode <sim|mysql|postgres|opengauss|mysql2pg|mysql2og>  运行模式（默认 sim）\n"
-      "                                 mysql2og = MySQL -> openGauss\n"
+      "  --mode <sim|mysql2pg|mysql2og|pg2mysql|pg2og|og2pg|og2mysql|mysql2mysql>\n"
+      "                                 运行模式（默认 sim）\n"
+      "  --source-type <mysql|pg|og>   覆盖源类型\n"
+      "  --target-type <mysql|pg|og>   覆盖目标类型\n"
       "  --source <dsn>                源库 DSN\n"
       "  --target <dsn>                目标库 DSN\n"
       "  --batch <N>                   每批行数（默认 1000）\n"
@@ -79,6 +81,8 @@ int main(int argc, char** argv) {
   bool exit_after = false;
   bool verify_only = false;
   bool cdc_only = false;
+  bool type_map_explicit = false;
+  std::string source_type_flag, target_type_flag;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -95,6 +99,8 @@ int main(int argc, char** argv) {
     else if (a == "--workers") o.workers = std::stoi(next());
     else if (a == "--pk-min-rows") o.pk_min_rows = std::stoi(next());
     else if (a == "--no-pk-parallel") o.pk_parallel = false;
+    else if (a == "--source-type") source_type_flag = next();
+    else if (a == "--target-type") target_type_flag = next();
     else if (a == "--target-dialect") {
       const std::string d = next();
       if (d == "opengauss" || d == "og") o.opengauss = true;
@@ -104,7 +110,7 @@ int main(int argc, char** argv) {
     else if (a == "--out-dir") o.out_dir = next();
     else if (a == "--throttle") o.throttle_ms = std::stoi(next());
     else if (a == "--port") o.http_port = std::stoi(next());
-    else if (a == "--type-map") o.type_map_path = next();
+    else if (a == "--type-map") { o.type_map_path = next(); type_map_explicit = true; }
     else if (a == "--tables-config") o.table_policy_path = next();
     else if (a == "--no-index") o.build_indexes = false;
     else if (a == "--no-analyze") o.analyze_after = false;
@@ -124,9 +130,38 @@ int main(int argc, char** argv) {
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
   }
 
-  if (o.mode == "mysql2og" || o.mode == "mysql2opengauss" ||
-      o.mode == "opengauss")
-    o.opengauss = true;
+  struct ModeSpec { const char* mode; const char* s; const char* t; };
+  static const ModeSpec kModes[] = {
+      {"sim", "sim", "sim"},          {"mysql2pg", "mysql", "pg"},
+      {"mysql2og", "mysql", "og"},    {"mysql2opengauss", "mysql", "og"},
+      {"pg2mysql", "pg", "mysql"},    {"pg2og", "pg", "og"},
+      {"og2pg", "og", "pg"},          {"og2mysql", "og", "mysql"},
+      {"mysql2mysql", "mysql", "mysql"},
+      {"mysql", "mysql", ""},         {"postgres", "", "pg"},
+      {"opengauss", "", "og"},
+  };
+  for (const auto& ms : kModes) {
+    if (o.mode == ms.mode) { o.source_kind = ms.s; o.target_kind = ms.t; break; }
+  }
+  if (o.source_kind.empty() && source_type_flag.empty()) {
+    std::fprintf(stderr, "[fatal] unknown mode: %s\n", o.mode.c_str());
+    return 2;
+  }
+  if (!source_type_flag.empty()) o.source_kind = source_type_flag;
+  if (!target_type_flag.empty()) o.target_kind = target_type_flag;
+  if (o.target_kind == "og") o.opengauss = true;
+  if (o.source_kind == "pg" || o.source_kind == "og")
+    o.pg_source_uses_source = true;
+
+  if (!type_map_explicit && (o.source_kind == "pg" || o.source_kind == "og")) {
+    o.type_map_path = (o.target_kind == "mysql")
+                          ? "config/type_map.pg2mysql.json"
+                          : "config/type_map.pg.json";
+  }
+  if (!type_map_explicit && o.source_kind == "mysql" &&
+      o.target_kind == "mysql") {
+    o.type_map_path = "config/type_map.mysql.json";
+  }
 
   mig::TypeMap tm;
   mig::Status st = tm.load(o.type_map_path);

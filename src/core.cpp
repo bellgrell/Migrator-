@@ -213,7 +213,10 @@ std::string TypeMap::map_type(const std::string& src_type) const {
       // 目标类型里带 {args} 就替换
       std::string dst = it2->second;
       auto at = dst.find("{args}");
-      if (at != std::string::npos) dst.replace(at, 6, args);
+      if (at != std::string::npos) {
+        if (!args.empty()) dst.replace(at, 6, args);
+        else dst.erase(at, 6);
+      }
       return dst;
     }
     return head;
@@ -247,6 +250,44 @@ std::string TypeMap::to_json() const {
   }
   o << "}}";
   return o.str();
+}
+
+std::string mysql_ident(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 2);
+  for (char c : s) {
+    out.push_back(c);
+    if (c == '`') out.push_back('`');
+  }
+  return out;
+}
+
+std::string build_ddl_mysql(const TableSchema& s) {
+  std::vector<std::string> parts;
+  parts.reserve(s.columns.size() + 1);
+  for (const auto& c : s.columns) {
+    std::string line = "  `" + mysql_ident(c.name) + "` " +
+                       (c.dst_type.empty() ? c.src_type : c.dst_type);
+    if (!c.nullable) line += " NOT NULL";
+    parts.push_back(line);
+  }
+  if (!s.primary_key.empty()) {
+    std::string pk = "  PRIMARY KEY (";
+    for (size_t i = 0; i < s.primary_key.size(); ++i) {
+      if (i) pk += ", ";
+      pk += "`" + mysql_ident(s.primary_key[i]) + "`";
+    }
+    pk += ")";
+    parts.push_back(pk);
+  }
+  std::string out = "CREATE TABLE IF NOT EXISTS `" + mysql_ident(s.name) + "` (\n";
+  for (size_t i = 0; i < parts.size(); ++i) {
+    out += parts[i];
+    if (i + 1 < parts.size()) out += ",";
+    out += "\n";
+  }
+  out += ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n";
+  return out;
 }
 
 std::string build_ddl(const TableSchema& s) {
