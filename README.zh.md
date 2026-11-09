@@ -58,6 +58,8 @@ cmake --build build -j
 
 核心二进制仍然只依赖 `libmysqlclient` 和 `libpq`。
 
+Web 面板会显示已编译的模块及状态；模块是编译期开关，修改需要重新编译。
+
 ## 快速开始
 
 MySQL 到 PostgreSQL：
@@ -121,6 +123,8 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--cdc-retries` | 10 | CDC 断线重连次数 |
 | `--cdc-slot` | migrator_slot | PostgreSQL CDC 逻辑复制槽名 |
 | `--repair` | 关 | 校验后按主键补/删差异 |
+| `--only-tables` | — | 只迁移指定表（逗号分隔） |
+| `--exclude-tables` | — | 排除指定表 |
 | `--consistent-snapshot` | 关 | 一致性快照（MySQL 用 binlog 位点；PG/openGauss 用 REPEATABLE READ），自动 workers=1 |
 | `--resume` | 关 | 按主键水位断点续传 |
 | `--resume-dir` | out/resume | 断点文件目录 |

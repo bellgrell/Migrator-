@@ -100,9 +100,28 @@ void usage() {
       "  --rows <N>                    模拟总行数（默认 200000）\n"
       "  --tables <N>                  模拟表数（默认 4）\n"
       "  --port <N>                    面板端口（默认 8123）\n"
+      "  --only-tables <a,b,c>         只迁移指定表（逗号分隔）\n"
+      "  --exclude-tables <a,b,c>      排除指定表\n"
       "  --exit                        迁移完退出\n"
       "  --features                    显示编译进来的模块\n"
       "  -h, --help                    显示帮助\n");
+}
+
+std::vector<std::string> split_list(const std::string& s) {
+  std::vector<std::string> out;
+  size_t p = 0;
+  while (p <= s.size()) {
+    const size_t c = s.find(',', p);
+    std::string item = s.substr(p, c == std::string::npos ? std::string::npos : c - p);
+    while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) item.erase(item.begin());
+    while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) item.pop_back();
+    const size_t dot = item.find('.');
+    if (dot != std::string::npos) item = item.substr(dot + 1);
+    if (!item.empty()) out.push_back(item);
+    if (c == std::string::npos) break;
+    p = c + 1;
+  }
+  return out;
 }
 
 std::string fmt_num(int64_t v) {
@@ -178,6 +197,8 @@ int main(int argc, char** argv) {
     else if (a == "--mysql-ssl-mode") o.mysql_ssl_mode = next();
     else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
     else if (a == "--cdc-slot") o.cdc_slot = next();
+    else if (a == "--only-tables") o.only_tables = split_list(next());
+    else if (a == "--exclude-tables") o.exclude_tables = split_list(next());
     else if (a == "--exit") exit_after = true;
     else if (a == "--features") { print_features(); return 0; }
     else if (a == "-h" || a == "--help") { usage(); return 0; }

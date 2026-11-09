@@ -102,6 +102,8 @@ struct Options {
   bool resume = false;               // 按主键水位断点续传
   bool repair = false;               // 校验后按主键补/删
   std::string resume_dir = "out/resume";
+  std::vector<std::string> only_tables;     // 仅迁移这些表
+  std::vector<std::string> exclude_tables;  // 排除这些表
   std::string snapshot_position_path = "out/snapshot-position.txt";
   int cdc_retries = 10;          // CDC 断线重连次数
   std::string cdc_slot = "migrator_slot";

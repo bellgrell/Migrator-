@@ -103,6 +103,39 @@ void handle(socket_t fd, Metrics& m) {
     body = m.series_json();
   } else if (path == "/api/health") {
     body = "{\"ok\":true}";
+  } else if (path == "/api/features") {
+    body = "{";
+    body += "\"pg_cdc\":";
+#ifdef MIG_ENABLE_PG_CDC
+    body += "true";
+#else
+    body += "false";
+#endif
+    body += ",\"repair\":";
+#ifdef MIG_ENABLE_REPAIR
+    body += "true";
+#else
+    body += "false";
+#endif
+    body += ",\"metrics\":";
+#ifdef MIG_ENABLE_METRICS
+    body += "true";
+#else
+    body += "false";
+#endif
+    body += ",\"snapshot\":";
+#ifdef MIG_ENABLE_SNAPSHOT
+    body += "true";
+#else
+    body += "false";
+#endif
+    body += ",\"resume\":";
+#ifdef MIG_ENABLE_RESUME
+    body += "true";
+#else
+    body += "false";
+#endif
+    body += "}";
   } else if (path == "/metrics") {
 #ifdef MIG_ENABLE_METRICS
     ctype = "text/plain; version=0.0.4; charset=utf-8";

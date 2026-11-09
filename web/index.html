@@ -60,6 +60,10 @@
   .log .ok{color:var(--ok)}
   .log .bad{color:var(--bad)}
   .dim{color:var(--dim)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
+  .chip.on{background:rgba(61,220,151,.15);color:var(--ok);border-color:rgba(61,220,151,.4)}
+  .chip.off{background:#1b2740;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -127,6 +131,12 @@
     <h2 data-i18n="eventsTitle">Event stream</h2>
     <div class="log" id="events"></div>
   </section>
+
+  <section class="panel">
+    <h2 data-i18n="modulesTitle">Modules</h2>
+    <div class="chips" id="features"></div>
+    <div class="dim" style="margin-top:8px;font-size:12px" data-i18n="modulesHint">Compiled-in modules; rebuild to change.</div>
+  </section>
 </main>
 
 <script>
@@ -139,6 +149,7 @@ var I18N = {
     verifyWaiting: "校验：等待中", verifyRunning: "校验：进行中…",
     verifyPassed: "校验：通过 ✓", verifyFailed: "校验：失败 {n} 张表",
     chartTitle: "实时吞吐（rows/s）", tablesTitle: "表进度", eventsTitle: "事件流",
+    modulesTitle: "模块", modulesHint: "编译期模块，修改需重新编译", on: "开启", off: "关闭",
     tableName: "表名", status: "状态", done: "已迁移", total: "总数",
     errorsCol: "错误", progressCol: "进度",
     waitingData: "等待数据…", waitingSample: "等待采样…",
@@ -155,7 +166,7 @@ var I18N = {
     verifyWaiting: "verify: waiting", verifyRunning: "verify: running…",
     verifyPassed: "verify: passed ✓", verifyFailed: "verify: failed ({n} tables)",
     chartTitle: "Live throughput (rows/s)", tablesTitle: "Table progress",
-    eventsTitle: "Event stream", tableName: "Table", status: "Status",
+    eventsTitle: "Event stream", modulesTitle: "Modules", modulesHint: "Compiled-in modules; rebuild to change.", on: "on", off: "off", tableName: "Table", status: "Status",
     done: "Done", total: "Total", errorsCol: "Errors", progressCol: "Progress",
     waitingData: "waiting for data…", waitingSample: "waiting for samples…",
     disconnected: "disconnected, retrying…",
@@ -171,7 +182,7 @@ var I18N = {
     verifyWaiting: "проверка: ожидание", verifyRunning: "проверка: выполняется…",
     verifyPassed: "проверка: успешно ✓", verifyFailed: "проверка: ошибок таблиц: {n}",
     chartTitle: "Текущая пропускная способность (строк/с)", tablesTitle: "Прогресс таблиц",
-    eventsTitle: "Поток событий", tableName: "Таблица", status: "Статус",
+    eventsTitle: "Поток событий", modulesTitle: "Модули", modulesHint: "Модули задаются при сборке; для изменения пересоберите.", on: "вкл.", off: "выкл.", tableName: "Таблица", status: "Статус",
     done: "Перенесено", total: "Всего", errorsCol: "Ошибки", progressCol: "Прогресс",
     waitingData: "ожидание данных…", waitingSample: "ожидание замеров…",
     disconnected: "соединение потеряно, повтор…",
@@ -185,7 +196,7 @@ function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { retur
 function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 var lang = storeGet('mm-lang') || (navigator.language || 'en').slice(0, 2);
 if (lang !== 'zh' && lang !== 'ru') lang = 'en';
-var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null;
+var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null, lastFeatures = null;
 
 function t(k) {
   return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k;
@@ -203,6 +214,7 @@ function applyLang() {
   document.getElementById('lang').value = lang;
   if (lastStatus) renderStatus(lastStatus);
   if (lastTables) renderTables(lastTables);
+  if (lastFeatures) renderFeatures(lastFeatures);
   drawChart(lastSeries || []);
 }
 function setLang(v) {
@@ -310,6 +322,20 @@ function renderEvents(list){
   box.innerHTML=html;
   if(atBottom) box.scrollTop=box.scrollHeight;
 }
+function renderFeatures(f){
+  lastFeatures = f;
+  var box = document.getElementById('features');
+  if (!box) return;
+  var keys = ['pg_cdc','repair','metrics','snapshot','resume'];
+  var html = '';
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var on = !!(f && f[k]);
+    html += '<span class="chip ' + (on ? 'on' : 'off') + '">' + k + ' ' + (on ? t('on') : t('off')) + '</span>';
+  }
+  box.innerHTML = html;
+}
+
 function drawChart(series){
   lastSeries = series;
   var cv=document.getElementById('chart');
@@ -362,6 +388,8 @@ async function tick(){
     renderEvents(await re.json());
     var rq=await fetch('/api/series',{cache:'no-store'});
     drawChart(await rq.json());
+    var rf=await fetch('/api/features',{cache:'no-store'});
+    renderFeatures(await rf.json());
   }catch(e){
     document.getElementById('meta').textContent=t('disconnected');
   }

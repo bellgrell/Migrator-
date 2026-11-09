@@ -58,6 +58,8 @@ cmake --build build -j
 
 The core binary still depends only on `libmysqlclient` and `libpq`.
 
+The web dashboard shows the compiled modules and their status. Module switches are build-time, so changing them requires a rebuild.
+
 ## Quick start
 
 MySQL to PostgreSQL:
@@ -121,6 +123,8 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--cdc-retries` | 10 | CDC reconnect attempts |
 | `--cdc-slot` | migrator_slot | Logical replication slot name for PostgreSQL CDC |
 | `--repair` | off | After verification, insert missing and delete extra rows by primary key |
+| `--only-tables` | — | Migrate only these tables (comma-separated) |
+| `--exclude-tables` | — | Exclude these tables |
 | `--consistent-snapshot` | off | Consistent snapshot (MySQL: binlog position; PG/openGauss: REPEATABLE READ), forces workers=1 |
 | `--resume` | off | Resume full load from PK watermark |
 | `--resume-dir` | out/resume | Resume checkpoint directory |

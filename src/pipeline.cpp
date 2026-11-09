@@ -515,6 +515,30 @@ bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
     return false;
   }
 
+  if (!o.only_tables.empty()) {
+    std::vector<std::string> filtered;
+    for (const auto& t : tables) {
+      for (const auto& n : o.only_tables) {
+        if (n == t) { filtered.push_back(t); break; }
+      }
+    }
+    for (const auto& n : o.only_tables) {
+      bool found = false;
+      for (const auto& t : tables) if (t == n) { found = true; break; }
+      if (!found) m.log("[warn] only-tables: not found: " + n);
+    }
+    tables.swap(filtered);
+  }
+  if (!o.exclude_tables.empty()) {
+    std::vector<std::string> kept;
+    for (const auto& t : tables) {
+      bool skip = false;
+      for (const auto& n : o.exclude_tables) if (n == t) { skip = true; break; }
+      if (!skip) kept.push_back(t);
+    }
+    tables.swap(kept);
+  }
+
   int64_t total = 0;
   for (const auto& t : tables) {
     TablePolicy pol;
