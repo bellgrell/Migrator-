@@ -96,6 +96,7 @@ struct Options {
   bool checksum = true;
   bool with_views = false;
   bool cdc = false;
+  bool opengauss = false;  // 目标方言：openGauss（PG 协议 + 差异处理）
   std::string cdc_start;
   std::string cdc_position_path = "out/cdc-position.txt";
   int cdc_server_id = 987654321;

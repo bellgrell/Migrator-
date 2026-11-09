@@ -54,7 +54,7 @@ std::string copy_value(const Value& v) {
       o << std::setprecision(17) << v.d;
       return o.str();
     }
-    case ValType::kBool: return v.b ? "t" : "f";
+    case ValType::kBool: return v.b ? "true" : "false";
     case ValType::kBytes: {
       static const char* hex = "0123456789abcdef";
       // COPY text 中反斜杠要再转义一层：\\x....
@@ -73,7 +73,8 @@ std::string copy_value(const Value& v) {
 
 class PgTarget : public ITarget {
  public:
-  explicit PgTarget(const Options& o) : opts_(o), use_copy_(o.use_copy) {}
+  explicit PgTarget(const Options& o)
+      : opts_(o), use_copy_(o.use_copy), og_requested_(o.opengauss), og_(o.opengauss) {}
   ~PgTarget() override { close(); }
 
   Status connect() override {
@@ -94,6 +95,19 @@ class PgTarget : public ITarget {
                          "postgres connect [" + host + ":" + port + "/" + db +
                              " as " + user + "]: " + e);
     }
+    // 会话设置：字符串转义与编码（PG/openGauss 通用）
+    exec_simple("SET client_encoding TO 'UTF8'");
+    exec_simple("SET standard_conforming_strings TO on");
+
+    PGresult* vr = PQexec(conn_, "SELECT version()");
+    if (vr && PQresultStatus(vr) == PGRES_TUPLES_OK && PQntuples(vr) > 0)
+      server_version_ = PQgetvalue(vr, 0, 0);
+    if (vr) PQclear(vr);
+    server_is_og_ = server_version_.find("openGauss") != std::string::npos ||
+                    server_version_.find("GaussDB") != std::string::npos;
+    // 请求 openGauss 但连到 PG 时，不做 openGauss 特化（describe 会标注）
+    if (og_ && !server_is_og_) og_ = false;
+
     return exec_simple("BEGIN");
   }
 
@@ -192,9 +206,18 @@ class PgTarget : public ITarget {
 
   std::string describe() override {
     std::string mode = use_copy_ ? "COPY" : "INSERT";
-    return "PostgreSQL target (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
+    std::string kind = server_is_og_ ? "openGauss" : "PostgreSQL";
+    if (og_requested_ && !server_is_og_ && !server_version_.empty())
+      kind += " [requested openGauss]";
+    std::string ver;
+    if (!server_version_.empty()) {
+      std::string v = server_version_;
+      if (v.size() > 60) v = v.substr(0, 60) + "...";
+      ver = ", " + v;
+    }
+    return kind + " target (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
            dsn_get(opts_.target, "port", "5432") + "/" +
-           dsn_get(opts_.target, "db", "postgres") + ", " + mode + ")";
+           dsn_get(opts_.target, "db", "postgres") + ", " + mode + ver + ")";
   }
 
  private:
@@ -222,13 +245,21 @@ class PgTarget : public ITarget {
     const std::string q = "COPY \"" + table + "\" FROM STDIN WITH (FORMAT text)";
     PGresult* r = PQexec(conn_, q.c_str());
     if (!r) return Status::Err(Code::kDb, "COPY exec failed");
-    const bool ok = PQresultStatus(r) == PGRES_COPY_IN;
-    if (!ok) {
-      std::string e = PQresultErrorMessage(r);
-      PQclear(r);
-      return Status::Err(Code::kDb, "COPY begin: " + e);
-    }
+    bool ok = PQresultStatus(r) == PGRES_COPY_IN;
+    std::string e = ok ? std::string() : PQresultErrorMessage(r);
     PQclear(r);
+    if (!ok) {
+      // 部分 openGauss 版本只接受最简 COPY 语法，失败后降级重试
+      if (og_) {
+        PGresult* r2 = PQexec(conn_, ("COPY \"" + table + "\" FROM STDIN").c_str());
+        if (r2) {
+          ok = PQresultStatus(r2) == PGRES_COPY_IN;
+          if (!ok) e = PQresultErrorMessage(r2);
+          PQclear(r2);
+        }
+      }
+      if (!ok) return Status::Err(Code::kDb, "COPY begin: " + e);
+    }
 
     copying_ = true;
     copy_table_ = table;
@@ -277,6 +308,10 @@ class PgTarget : public ITarget {
   Options opts_;
   PGconn* conn_ = nullptr;
   bool use_copy_ = true;
+  bool og_requested_ = false;
+  bool og_ = false;
+  bool server_is_og_ = false;
+  std::string server_version_;
   bool copying_ = false;
   std::string copy_table_;
   std::mutex mu_;

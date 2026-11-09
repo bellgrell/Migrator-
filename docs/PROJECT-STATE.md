@@ -46,6 +46,11 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
     ./build/migrator ... --cdc --cdc-ddl
     ./build/migrator ... --cdc-only --cdc-ddl
 
+    # MySQL -> openGauss
+    ./build/migrator --mode mysql2og --source '...' --target '...' \
+      --batch 2000 --workers 4
+    bench/opengauss-smoke.sh   # 端到端冒烟（需 OG_DSN 等环境变量）
+
 ## 4. 实测数据
 
 | 场景 | 结果 |
@@ -84,7 +89,9 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 - CDC 需要主键；无主键表跳过
 - 不支持 BIT / ENUM / SET / GEOMETRY 列
 - DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
-- DM8 未实现；openGauss 未实测（走 PG 协议）
+- DM8 未实现
+- openGauss 走 PG 协议：新增 mysql2og 模式，自动识别实例/会话设置/COPY 降级；
+  认证需 md5（默认 sha256 原生 libpq 不支持），库建议 DBCOMPATIBILITY='PG'
 - 目标表需为空或已对齐（重跑会撞主键）
 - 表内并行仅支持单列整数主键（tinyint/smallint/mediumint/int/bigint）；
   复合主键、无主键、非整数主键回退表级/顺序并行
@@ -92,7 +99,8 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 ## 7. 待办（按优先级）
 
 1. DM8 适配（类型映射 + dmfldr）
-2. openGauss 实测（Docker）
+2. openGauss 实测（本地 Docker 镜像下载受限；代码与 PG 协议层已回归 PASS，
+   真实实例冒烟见 bench/opengauss-smoke.sh）
 3. 根目录 README 更新（现有版本过时）
 4. ~~单表主键区间并行~~（已完成：`--workers` + 单列整数主键，5M 行 1.05M → 1.38M rows/s）
 5. CDC 事件批量应用（现在逐条 SQL，高写入量会延迟）

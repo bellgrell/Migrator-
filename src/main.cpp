@@ -20,7 +20,8 @@ void usage() {
       "                   --target \"host=127.0.0.1;port=5432;user=postgres;db=demo_dst\"\n"
       "\n"
       "迁移:\n"
-      "  --mode <sim|mysql|postgres|opengauss|mysql2pg>  运行模式（默认 sim）\n"
+      "  --mode <sim|mysql|postgres|opengauss|mysql2pg|mysql2og>  运行模式（默认 sim）\n"
+      "                                 mysql2og = MySQL -> openGauss\n"
       "  --source <dsn>                源库 DSN\n"
       "  --target <dsn>                目标库 DSN\n"
       "  --batch <N>                   每批行数（默认 1000）\n"
@@ -28,6 +29,7 @@ void usage() {
       "  --workers <N>                 并行线程数（默认 1；大表单表按主键区间并行）\n"
       "  --pk-min-rows <N>             触发表内主键并行的最小行数（默认 1000000）\n"
       "  --no-pk-parallel              关闭单表主键区间并行\n"
+      "  --target-dialect <pg|og>      目标方言（默认按 mode 推断）\n"
       "  --log-every <N>               每 N 批记一条日志（默认 10）\n"
       "  --out-dir <path>              日志目录（默认 out）\n"
       "  --throttle <ms>               每批休眠毫秒（默认 0）\n"
@@ -93,6 +95,11 @@ int main(int argc, char** argv) {
     else if (a == "--workers") o.workers = std::stoi(next());
     else if (a == "--pk-min-rows") o.pk_min_rows = std::stoi(next());
     else if (a == "--no-pk-parallel") o.pk_parallel = false;
+    else if (a == "--target-dialect") {
+      const std::string d = next();
+      if (d == "opengauss" || d == "og") o.opengauss = true;
+      else if (d == "postgres" || d == "pg") o.opengauss = false;
+    }
     else if (a == "--log-every") o.log_every = std::stoi(next());
     else if (a == "--out-dir") o.out_dir = next();
     else if (a == "--throttle") o.throttle_ms = std::stoi(next());
@@ -116,6 +123,10 @@ int main(int argc, char** argv) {
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
   }
+
+  if (o.mode == "mysql2og" || o.mode == "mysql2opengauss" ||
+      o.mode == "opengauss")
+    o.opengauss = true;
 
   mig::TypeMap tm;
   mig::Status st = tm.load(o.type_map_path);

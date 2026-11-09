@@ -550,10 +550,6 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
   m.started_at = now_sec();
   m.running = true;
   m.phase = "connecting";
-  m.source_desc = src.describe();
-  m.target_desc = tgt.describe();
-  m.log("source: " + m.source_desc);
-  m.log("target: " + m.target_desc);
   m.log("batch=" + std::to_string(o.batch_size) + " workers=" +
         std::to_string(o.workers) + " indexes=" +
         (o.build_indexes ? "on" : "off") + " analyze=" +
@@ -577,6 +573,12 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     m.phase = "error";
     return st;
   }
+
+  // 连接后再取描述：目标端能报告实际是 PostgreSQL 还是 openGauss
+  m.source_desc = src.describe();
+  m.target_desc = tgt.describe();
+  m.log("source: " + m.source_desc);
+  m.log("target: " + m.target_desc);
 
   tgt.reset_counters();
 

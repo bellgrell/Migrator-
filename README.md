@@ -18,6 +18,7 @@ C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（
 | CDC 轮转 | binlog 跨文件自动跟随 |
 | CDC DDL | ALTER / CREATE / DROP 基础转换后执行 |
 | 监控 | Web 面板 + Qt 6 桌面版 |
+| openGauss | `--mode mysql2og`，自动识别实例、PG 兼容库、md5 认证 |
 
 ## 快速开始
 
@@ -32,6 +33,12 @@ C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（
       --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
       --target 'host=127.0.0.1;port=5432;user=postgres;db=demo_dst' \
       --batch 2000 --workers 4 --with-views
+
+    # 全量迁移 MySQL -> openGauss（目标库用 PG 兼容模式，认证见 docs/usage.md §16）
+    ./build/migrator --mode mysql2og \
+      --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
+      --target 'host=127.0.0.1;port=5432;user=gaussdb;password=***;db=og_dst' \
+      --batch 2000 --workers 4
 
     # 全量 + 持续增量 + DDL 同步
     ./build/migrator --mode mysql2pg ... --cdc --cdc-ddl

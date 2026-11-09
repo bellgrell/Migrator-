@@ -36,10 +36,12 @@
 | mode | 源端 | 目标端 | 可用性 |
 |---|---|---|---|
 | sim | 内置模拟 | 内置模拟 | 完整 |
-| mysql2pg | MySQL | PostgreSQL/openGauss | 完整（推荐） |
+| mysql2pg | MySQL | PostgreSQL | 完整（推荐） |
+| mysql2og | MySQL | openGauss | 完整 |
 | mysql | MySQL | — | 仅源端 |
 | postgres | — | PostgreSQL | 仅目标端 |
 | opengauss | — | openGauss | 仅目标端 |
+| mysql2opengauss | MySQL | openGauss | mysql2og 的别名 |
 
 ## 4. 参数总表
 
@@ -193,5 +195,43 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 | 部分列类型不支持 | BIT / ENUM / SET / GEOMETRY |
 | DDL 方言转换有限 | DATE_FORMAT/GROUP_CONCAT/LIMIT x,y/分区语法需人工改写 |
 | DM8 未实现 | 保留接口 |
-| openGauss 未实测 | 走 PG 协议 |
+| openGauss 需 md5 认证 | 默认 sha256 不被原生 libpq 支持，见第 16 节 |
 | 目标表需为空或已对齐 | 直接重跑会撞主键 |
+
+## 16. openGauss 对接
+
+模式：`--mode mysql2og`（MySQL → openGauss），`mysql2opengauss` 为别名；
+`--mode opengauss` 仅目标端。
+
+    ./build/migrator --mode mysql2og \
+      --source "host=127.0.0.1;port=3306;user=root;db=demo" \
+      --target "host=127.0.0.1;port=5432;user=gaussdb;password=...;db=og_dst" \
+      --batch 2000 --workers 4
+
+创建目标库时建议显式用 PG 兼容模式（A 模式会把 `''` 当 NULL）：
+
+    CREATE DATABASE og_dst WITH ENCODING='UTF8' DBCOMPATIBILITY='PG';
+
+认证注意事项：
+
+- 原生 libpq 只支持 md5 / scram；openGauss 默认 `sha256` 会报
+  `unsupported authentication method`。迁移账号改用 md5：
+
+      ALTER SYSTEM SET password_encryption_type = 0;
+      -- 重新设置一次密码，才会以 md5 存储
+      ALTER USER migrator IDENTIFIED BY '...';
+      -- pg_hba.conf: host all all 0.0.0.0/0 md5
+      SELECT pg_reload_conf();
+
+- 或者改用 openGauss 自带的 libpq 重新链接本工具（默认用系统 libpq）。
+
+已做的兼容处理：
+
+- 连接后执行 `SELECT version()`，日志会标明实际是 openGauss 还是 PostgreSQL；
+- 会话固定 `client_encoding=UTF8`、`standard_conforming_strings=on`；
+- checksum 校验的游标优先 `NO SCROLL`，失败自动降级；
+- COPY / SAVEPOINT / ANALYZE / 索引迁移与 PostgreSQL 路径一致；
+- 布尔值 COPY 输出改为 `true`/`false`，两边都兼容。
+
+已知限制：openGauss 需要在目标库开启 PG 兼容模式；JDBC 驱动/ssl 认证等
+高级选项不在本工具范围内（只使用 libpq 基础能力）。

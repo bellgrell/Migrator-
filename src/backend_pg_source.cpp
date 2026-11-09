@@ -76,6 +76,14 @@ class PgSource : public ISource {
       if (conn_) { PQfinish(conn_); conn_ = nullptr; }
       return Status::Err(Code::kDb, "pg source connect: " + e);
     }
+    exec("SET client_encoding TO 'UTF8'");
+    exec("SET standard_conforming_strings TO on");
+    PGresult* vr = PQexec(conn_, "SELECT version()");
+    if (vr && PQresultStatus(vr) == PGRES_TUPLES_OK && PQntuples(vr) > 0)
+      server_version_ = PQgetvalue(vr, 0, 0);
+    if (vr) PQclear(vr);
+    server_is_og_ = server_version_.find("openGauss") != std::string::npos ||
+                    server_version_.find("GaussDB") != std::string::npos;
     return exec("BEGIN");
   }
 
@@ -118,10 +126,13 @@ class PgSource : public ISource {
 
   Status open_cursor(const std::string& table) override {
     close_cursor();
-    const std::string q = "DECLARE mig_cur NO SCROLL CURSOR FOR SELECT * FROM \"" +
-                          table + "\"";
-    Status st = exec(q);
-    if (!st.ok()) return st;
+    const std::string sel = "SELECT * FROM \"" + table + "\"";
+    Status st = exec("DECLARE mig_cur NO SCROLL CURSOR FOR " + sel);
+    if (!st.ok()) {
+      // openGauss 某些版本不接受 NO SCROLL，退回默认游标
+      st = exec("DECLARE mig_cur CURSOR FOR " + sel);
+      if (!st.ok()) return st;
+    }
     cursor_open_ = true;
     return Status::OK();
   }
@@ -189,7 +200,8 @@ class PgSource : public ISource {
   }
 
   std::string describe() override {
-    return "PostgreSQL source (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
+    const std::string kind = server_is_og_ ? "openGauss" : "PostgreSQL";
+    return kind + " source (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
            dsn_get(opts_.target, "port", "5432") + "/" +
            dsn_get(opts_.target, "db", "postgres") + ")";
   }
@@ -216,6 +228,8 @@ class PgSource : public ISource {
   Options opts_;
   PGconn* conn_ = nullptr;
   bool cursor_open_ = false;
+  bool server_is_og_ = false;
+  std::string server_version_;
 };
 
 }  // namespace
