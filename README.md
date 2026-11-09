@@ -1,68 +1,116 @@
 # mini-migrator
 
-面向国产数据库的**异构数据迁移工具**（学习 / 作品项目）。
+面向国产数据库的**异构数据迁移工具**：MySQL → PostgreSQL / openGauss。
 
-- 源端：MySQL / PostgreSQL
-- 目标端：openGauss / DM8
+C++17 实现，支持**全量迁移**与基于 binlog 的**实时增量同步（CDC）**。
 
-> 项目定位：**数据搬运 + 类型映射 + 校验**，不是数据库引擎。
-> 主要参考：pgloader（类型映射）、DataX/Addax（插件化）、Debezium（CDC）。
+## 亮点
 
-## 路线
-
-| 阶段 | 内容 |
+| 能力 | 实测结果 |
 |---|---|
-| M0 地基 | 配置 / 日志 / 通用类型 / 重试 |
-| M1 连接层 | 连接池 + 各数据库连接封装 |
-| M2 源端 | ISource 抽象 + MySQL 实现 |
-| M3 目标端 | ITarget 抽象 + openGauss 实现 |
-| **M4 类型映射** | ⭐ 两级映射 + DDL 生成 |
-| **M5 全量搬运** | ⭐ 游标读 + 批量写 + 事务 |
-| M6 校验 | 行数 / checksum / 抽样比对 |
-| M7 增量 CDC | binlog 解析 + 位点衔接 |
-| M8 工程化 | CLI / 重试 / 死信队列 |
-| M9 DM8 | 可选，留接口 |
+| 全量迁移（COPY 协议） | 1000 万行 / 8 表 / 9.32s → **107 万 rows/s** |
+| 表级策略 | copy / rebuild / skip |
+| 二级索引迁移 | 唯一 / 普通索引，跨表重名自动处理 |
+| BLOB 二进制 | 字节级一致（含 NUL） |
+| 视图迁移 | MySQL VIEW → PostgreSQL VIEW（基础方言转换） |
+| 校验 | 行数 + checksum，可检出单行篡改 |
+| CDC 增量 | 增 / 改 / 删实时同步，含负数 DECIMAL |
+| CDC 轮转 | binlog 跨文件自动跟随 |
+| CDC DDL | ALTER / CREATE / DROP 基础转换后执行 |
+| 监控 | Web 面板 + Qt 6 桌面版 |
 
-## 目录
+## 快速开始
 
-    include/migrator/     公共接口（status / slice / options / source / target）
-    src/common/           基础设施（日志、重试）
-    src/config/           配置解析 + 类型映射
-    src/db/mysql/         MySQL（含连接池）
-    src/db/postgres/      PostgreSQL
-    src/db/opengauss/     openGauss（继承 postgres）
-    src/db/dm8/           DM8（占位）
-    src/schema/           Schema 抽取 + DDL 生成
-    src/data/             全量搬运（copier / batch_writer）
-    src/cdc/              增量捕获
-    src/verify/           校验
-    src/util/             编码 / 校验和 / 状态实现
-    config/               YAML 配置（类型映射表放这里）
-    tests/ bench/ docs/
-    archive/              上一版（LSM 存储引擎）的代码，保留但不参与构建
-
-## 两个核心设计
-
-### 1. 两级类型映射
-
-    第一级：全局类型映射       mysql_type -> target_type
-    第二级：列级覆盖           某表某列的特殊处理
-
-参考 sqlines 的 sqlines_dtmap.txt / sqlines_cmap.txt。
-映射表是**配置文件**，改类型不用重新编译。
-
-### 2. 读一批、写一批
-
-    OpenCursor -> 循环 FetchBatch(N) -> WriteBatch(N) -> 每 M 批 Commit -> CloseCursor
-
-不要读一行写一行。
-
-## 构建
-
+    git clone <repo> && cd mini-migrator
     make
 
-## 环境
+    # 模拟运行（不需要数据库，可看面板效果）
+    ./build/migrator --mode sim --rows 600000 --tables 6 --throttle 200
 
-- MySQL / PostgreSQL：Docker 一条命令
-- openGauss：用 PostgreSQL 代替（同源，90% 语法相通）
-- DM8：商业版，暂留接口和映射表
+    # 全量迁移 MySQL -> PostgreSQL
+    ./build/migrator --mode mysql2pg \
+      --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
+      --target 'host=127.0.0.1;port=5432;user=postgres;db=demo_dst' \
+      --batch 2000 --workers 4 --with-views
+
+    # 全量 + 持续增量 + DDL 同步
+    ./build/migrator --mode mysql2pg ... --cdc --cdc-ddl
+
+    # 只跑增量（目标库已就绪）
+    ./build/migrator --mode mysql2pg ... --cdc-only --cdc-ddl
+
+面板：http://127.0.0.1:8123/
+
+完整参数见 `./build/migrator --help` 或 [docs/usage.md](docs/usage.md)。
+
+## 目录结构
+
+    src/
+      migrator.h            核心类型 / 接口 / Options / Metrics
+      core.cpp              错误码、值序列化、类型映射、DDL 生成
+      metrics.cpp           指标采集 + JSON 输出
+      pipeline.cpp          全量迁移流水线 + 校验
+      policy.cpp            表级策略 + 索引 DDL
+      views.cpp             视图方言转换
+      checksum.cpp          FNV-1a 校验和
+      cdc.cpp / cdc.h       binlog 解析 + 增量应用
+      backend_mysql.cpp     MySQL 源（libmysqlclient）
+      backend_pg.cpp        PostgreSQL 目标（libpq，COPY/INSERT）
+      backend_pg_source.cpp PostgreSQL 源（校验用）
+      backend_sim.cpp       模拟后端
+      backends.cpp          工厂
+      http.cpp              内置 HTTP 服务（POSIX / Winsock）
+      main.cpp              CLI
+    qt/                     Qt 6 桌面版（qmake 工程）
+    web/index.html          监控面板（单文件，无 CDN）
+    config/                 type_map.json / tables.json / migrator.ini
+    docs/                   usage.md / PROJECT-STATE.md / plan.md
+    bench/stress.sh         压测脚本
+
+## 设计要点
+
+**1. 两级类型映射**（`config/type_map.json`）
+
+    全局：mysql_type -> target_type（支持 {args} 参数替换）
+    列级：schema.table.column 的特殊覆盖
+
+**2. 读一批、写一批**
+
+    游标流式读 -> FetchBatch(N) -> COPY/多行 INSERT -> 定期 COMMIT
+
+**3. 表级策略**（`config/tables.json`）
+
+    { "tables": { "daily_stats": "rebuild:sql/daily_stats.sql", "tmp": "skip" } }
+
+**4. CDC**
+
+    binlog(ROW) -> TABLE_MAP/ROWS 事件 -> 主键 UPSERT / DELETE
+    位点保存在 out/cdc-position.txt，重启续传
+
+## 构建（跨平台）
+
+    # macOS / Linux
+    make
+
+    # 通用
+    cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+
+依赖：libmysqlclient、libpq（可选，缺失时对应后端不编译）。
+
+## 已知限制
+
+- CDC 需要主键；无主键表跳过
+- 不支持 BIT / ENUM / SET / GEOMETRY 列
+- DDL 方言转换有限（DATE_FORMAT / GROUP_CONCAT / LIMIT x,y / 分区需人工）
+- DM8 未实现；openGauss 未实测（走 PG 协议）
+- 目标表需为空或已对齐（直接重跑会撞主键）
+
+## 相关文档
+
+- [docs/usage.md](docs/usage.md) — 完整使用说明（15 章）
+- [docs/PROJECT-STATE.md](docs/PROJECT-STATE.md) — 交接文档（架构 / 13 个坑 / 待办）
+- [docs/plan.md](docs/plan.md) — 阶段计划
+
+## 参考项目
+
+pgloader（类型映射）、DataX/Addax（插件化）、Debezium（CDC）、sqlines（两级映射表）。
