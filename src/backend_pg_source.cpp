@@ -208,6 +208,29 @@ class PgSource : public ISource {
     return Status::OK();
   }
 
+  Status begin_snapshot(std::string& file, uint64_t& pos) override {
+    exec("COMMIT");
+    Status st = exec("BEGIN ISOLATION LEVEL REPEATABLE READ");
+    if (!st.ok()) return st;
+    file = server_is_og_ ? "opengauss-snapshot" : "postgres-snapshot";
+    pos = 0;
+    return Status::OK();
+  }
+
+  void end_snapshot() override { exec("COMMIT"); }
+
+  Status open_cursor_from(const std::string& table, const std::string& column,
+                          const std::string& after_literal) override {
+    close_cursor();
+    const std::string sel = "SELECT * FROM \"" + table + "\" WHERE \"" + column +
+                            "\" > " + after_literal + " ORDER BY \"" + column + "\"";
+    Status st = exec("DECLARE mig_cur NO SCROLL CURSOR FOR " + sel);
+    if (!st.ok()) st = exec("DECLARE mig_cur CURSOR FOR " + sel);
+    if (!st.ok()) return st;
+    cursor_open_ = true;
+    return Status::OK();
+  }
+
   Status open_cursor(const std::string& table) override {
     close_cursor();
     const std::string sel = "SELECT * FROM \"" + table + "\"";

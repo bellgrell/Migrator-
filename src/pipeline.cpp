@@ -676,8 +676,10 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
       m.log("consistent snapshot at " + snap_file + ":" + std::to_string(snap_pos));
       std::ofstream sp(o.snapshot_position_path, std::ios::trunc);
       sp << snap_file << ":" << snap_pos;
-      std::ofstream cp(o.cdc_position_path, std::ios::trunc);
-      cp << snap_file << ":" << snap_pos;
+      if (o.source_kind == "mysql") {
+        std::ofstream cp(o.cdc_position_path, std::ios::trunc);
+        cp << snap_file << ":" << snap_pos;
+      }
     } else {
       m.log("[warn] consistent snapshot: " + ss.str());
     }

@@ -104,7 +104,7 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
 | `--mysql-ssl-mode` | PREFERRED | MySQL SSL mode: DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | CDC reconnect attempts |
-| `--consistent-snapshot` | off | MySQL consistent snapshot (single connection, forces workers=1) |
+| `--consistent-snapshot` | off | Consistent snapshot (MySQL: binlog position; PG/openGauss: REPEATABLE READ), forces workers=1 |
 | `--resume` | off | Resume full load from PK watermark |
 | `--resume-dir` | out/resume | Resume checkpoint directory |
 
@@ -147,8 +147,8 @@ Typical table-level results with the same dataset:
 - Checksum read failures make verification FAIL instead of being silently skipped.
 - Full-load connections retry with backoff; CDC reconnects from the last committed binlog position.
 - For remote databases, open the DB port, allow the client host in grants/firewall, and use SSH tunnel/VPN if needed.
-- `--resume` is implemented for MySQL sources; other sources fall back to a full copy.
-- `--consistent-snapshot` uses a single MySQL connection and forces `workers=1`.
+- `--resume` is implemented for MySQL, PostgreSQL and openGauss sources; it requires a single-column primary key.
+- `--consistent-snapshot` uses a single source connection (MySQL: consistent snapshot + binlog position; PG/openGauss: REPEATABLE READ) and forces `workers=1`.
 - `--resume` and `--truncate` are mutually exclusive.
 - PostgreSQL/openGauss sources currently use a single sequential cursor; single-table range parallelism is implemented for MySQL sources only.
 - MySQL target bulk load uses `LOAD DATA LOCAL INFILE`; the server must have `local_infile=ON`. Tables with binary columns automatically fall back to batched INSERT.
