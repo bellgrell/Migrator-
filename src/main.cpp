@@ -267,6 +267,8 @@ int main(int argc, char** argv) {
     if (!vr.ok()) rc = vr;
   }
 
+  if (!cdc_only) src->end_snapshot();
+
   if (rc.ok() && o.cdc) {
     mig::Status cr = mig::run_cdc(o, m, o.cdc_max_events);
     if (!cr.ok()) {
