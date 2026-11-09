@@ -728,6 +728,10 @@ Status apply_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
 
 }  // namespace
 
+Status apply_cdc_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
+  return apply_event(tgt, s, ev);
+}
+
 Status run_cdc(const Options& o, Metrics& m, int max_events) {
   std::string file;
   uint64_t pos = 0;

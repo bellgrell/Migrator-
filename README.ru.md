@@ -104,6 +104,8 @@ PostgreSQL → MySQL:
 | `--sslmode` | prefer | sslmode для PostgreSQL/openGauss |
 | `--mysql-ssl-mode` | PREFERRED | SSL-режим MySQL: DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | Число переподключений CDC |
+| `--cdc-slot` | migrator_slot | Имя слота логической репликации для PostgreSQL CDC |
+| `--repair` | выкл. | После проверки добавить недостающие и удалить лишние строки по первичному ключу |
 | `--consistent-snapshot` | выкл. | Согласованный снимок (MySQL: позиция binlog; PG/openGauss: REPEATABLE READ), workers=1 |
 | `--resume` | выкл. | Продолжить полную миграцию с позиции первичного ключа |
 | `--resume-dir` | out/resume | Каталог контрольных точек |
@@ -138,7 +140,9 @@ PostgreSQL → MySQL:
 ## Ограничения
 
 - CDC требует первичный ключ; таблицы без первичного ключа пропускаются.
-- CDC поддерживает только источник MySQL (события binlog ROW).
+- CDC поддерживает источники MySQL (binlog ROW) и PostgreSQL (логическое декодирование wal2json); цель PG CDC должна быть PG/openGauss, не MySQL.
+- Для PostgreSQL CDC нужны `wal_level=logical`, разрешённый плагин `wal2json` в `output_plugin_libraries` и слот репликации; изменения во время полной миграции не будут захвачены, если слот не создан заранее.
+- `--repair` требует одностолбцовый первичный ключ, хранит наборы ключей в памяти, добавляет недостающие и удаляет лишние строки, затем повторно проверяет.
 - Неподдерживаемые типы столбцов: BIT, ENUM, SET, GEOMETRY.
 - Преобразование DDL ограничено; сложный MySQL-специфичный DDL может требовать ручной правки.
 - DM8 не реализован.

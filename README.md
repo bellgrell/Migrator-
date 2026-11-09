@@ -104,6 +104,8 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
 | `--mysql-ssl-mode` | PREFERRED | MySQL SSL mode: DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | CDC reconnect attempts |
+| `--cdc-slot` | migrator_slot | Logical replication slot name for PostgreSQL CDC |
+| `--repair` | off | After verification, insert missing and delete extra rows by primary key |
 | `--consistent-snapshot` | off | Consistent snapshot (MySQL: binlog position; PG/openGauss: REPEATABLE READ), forces workers=1 |
 | `--resume` | off | Resume full load from PK watermark |
 | `--resume-dir` | out/resume | Resume checkpoint directory |
@@ -138,7 +140,9 @@ Typical table-level results with the same dataset:
 ## Limitations
 
 - CDC requires a primary key; tables without a primary key are skipped.
-- CDC supports only a MySQL source (binlog ROW events).
+- CDC supports MySQL sources (binlog ROW events) and PostgreSQL sources (wal2json logical decoding); the PostgreSQL CDC target must be PG/openGauss, not MySQL.
+- PostgreSQL CDC requires `wal_level=logical`, the `wal2json` output plugin allowed in `output_plugin_libraries`, and a replication slot. Changes made during a full load are not captured unless the slot existed before the load.
+- `--repair` requires a single-column primary key and holds primary-key sets in memory; it inserts missing rows and deletes extra rows, then re-verifies.
 - Unsupported column types: BIT, ENUM, SET, GEOMETRY.
 - DDL dialect conversion is limited; complex MySQL-specific DDL may need manual rewriting.
 - DM8 is not implemented.

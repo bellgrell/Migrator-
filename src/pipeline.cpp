@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "backends.h"
@@ -885,7 +886,9 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
       vo.mysql_source_dsn = o.target;
       dst = make_mysql_source(vo, st);
     } else {
-      dst = make_pg_source(o, st);
+      Options vo = o;
+      vo.pg_source_uses_source = false;
+      dst = make_pg_source(vo, st);
     }
     if (!dst) {
       ++mismatch;
@@ -927,6 +930,136 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   m.log(mismatch == 0 ? "verify PASSED" : "verify FAILED");
   return mismatch == 0 ? Status::OK()
                        : Status::Err(Code::kInvalid, "row count mismatch");
+}
+
+Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
+  if (o.target_kind == "sim") return Status::Err(Code::kUnsupported, "repair not supported for sim");
+  Status st;
+  std::shared_ptr<ISource> dst;
+  if (o.target_kind == "mysql") {
+    Options vo = o;
+    vo.mysql_source_dsn = o.target;
+    dst = make_mysql_source(vo, st);
+  } else {
+    Options vo = o;
+    vo.pg_source_uses_source = false;
+    dst = make_pg_source(vo, st);
+  }
+  if (!dst || !dst->connect().ok())
+    return Status::Err(Code::kDb, "repair: target verifier connect failed");
+
+  std::vector<std::shared_ptr<TableMetric>> snapshot;
+  {
+    std::lock_guard<std::mutex> lk(m.mu);
+    snapshot = m.tables;
+  }
+  if (snapshot.empty()) {
+    std::vector<std::string> names;
+    if (src.list_tables(names).ok()) {
+      for (auto& name : names) {
+        auto tm = std::make_shared<TableMetric>();
+        tm->name = name;
+        tm->total = src.total_rows(name);
+        snapshot.push_back(tm);
+      }
+    }
+  }
+
+  int repaired = 0;
+  for (auto& t : snapshot) {
+    if (!t || t->total <= 0) continue;
+    TableSchema s;
+    if (!src.read_schema(t->name, s).ok()) continue;
+    const ColumnDef* pk = single_pk(s);
+    if (!pk) {
+      m.log("[repair] skip " + t->name + ": no single primary key");
+      continue;
+    }
+    int pk_idx = -1;
+    for (size_t i = 0; i < s.columns.size(); ++i)
+      if (s.columns[i].name == pk->name) { pk_idx = (int)i; break; }
+    if (pk_idx < 0) continue;
+
+    std::unordered_set<std::string> a;
+    std::unordered_set<std::string> b;
+    st = src.open_cursor(t->name);
+    if (!st.ok()) continue;
+    std::vector<Row> rows;
+    while (true) {
+      rows.clear();
+      if (!src.fetch_batch(2000, rows).ok() || rows.empty()) break;
+      for (auto& r : rows)
+        if ((size_t)pk_idx < r.size()) a.insert(r[(size_t)pk_idx].sql_literal());
+    }
+    src.close_cursor();
+
+    st = dst->open_cursor(t->name);
+    if (!st.ok()) continue;
+    while (true) {
+      rows.clear();
+      if (!dst->fetch_batch(2000, rows).ok() || rows.empty()) break;
+      for (auto& r : rows)
+        if ((size_t)pk_idx < r.size()) b.insert(r[(size_t)pk_idx].sql_literal());
+    }
+    dst->close_cursor();
+
+    std::vector<std::string> missing;
+    std::vector<std::string> extra;
+    for (auto& k : a) if (!b.count(k)) missing.push_back(k);
+    for (auto& k : b) if (!a.count(k)) extra.push_back(k);
+    if (missing.empty() && extra.empty()) continue;
+
+    if (!missing.empty()) {
+      std::unordered_set<std::string> want(missing.begin(), missing.end());
+      st = src.open_cursor(t->name);
+      if (st.ok()) {
+        std::vector<Row> batch;
+        int commits = 0;
+        while (true) {
+          rows.clear();
+          if (!src.fetch_batch(2000, rows).ok() || rows.empty()) break;
+          for (auto& r : rows) {
+            if ((size_t)pk_idx < r.size() && want.count(r[(size_t)pk_idx].sql_literal()))
+              batch.push_back(r);
+          }
+          if (batch.size() >= 500) {
+            tgt.write_batch(t->name, batch);
+            batch.clear();
+            if (++commits % (o.commit_every > 0 ? o.commit_every : 10) == 0) tgt.commit();
+          }
+        }
+        if (!batch.empty()) tgt.write_batch(t->name, batch);
+        tgt.commit();
+        src.close_cursor();
+      }
+    }
+
+    if (!extra.empty()) {
+      std::unordered_set<std::string> drop(extra.begin(), extra.end());
+      st = dst->open_cursor(t->name);
+      if (st.ok()) {
+        int n = 0;
+        while (true) {
+          rows.clear();
+          if (!dst->fetch_batch(2000, rows).ok() || rows.empty()) break;
+          for (auto& r : rows) {
+            if ((size_t)pk_idx < r.size() && drop.count(r[(size_t)pk_idx].sql_literal())) {
+              tgt.exec_sql(tgt.delete_sql(t->name, pk->name, r[(size_t)pk_idx].sql_literal()));
+              if (++n % 200 == 0) tgt.commit();
+            }
+          }
+        }
+        tgt.commit();
+        dst->close_cursor();
+      }
+    }
+
+    m.log("repair " + t->name + ": +" + std::to_string(missing.size()) + " / -" +
+          std::to_string(extra.size()));
+    repaired += 1;
+  }
+  m.log("repair finished: " + std::to_string(repaired) + " table(s) adjusted");
+  return Status::OK();
 }
 
 void write_log_file(Metrics& m, const std::string& dir) {

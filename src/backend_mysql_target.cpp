@@ -105,6 +105,11 @@ class MySqlTarget : public ITarget {
     return Status::OK();
   }
 
+  std::string delete_sql(const std::string& table, const std::string& pk,
+                         const std::string& literal) override {
+    return "DELETE FROM `" + table + "` WHERE `" + pk + "` = " + literal + ";";
+  }
+
   Status drop_table(const std::string& table) override {
     return exec_sql("DROP TABLE IF EXISTS `" + table + "`;");
   }

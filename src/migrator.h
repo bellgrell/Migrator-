@@ -100,9 +100,12 @@ struct Options {
   bool truncate_target = false;  // 迁移前 DROP 目标表，便于失败后重跑
   bool consistent_snapshot = false;  // MySQL 全局一致性快照（单连接）
   bool resume = false;               // 按主键水位断点续传
+  bool repair = false;               // 校验后按主键补/删
   std::string resume_dir = "out/resume";
   std::string snapshot_position_path = "out/snapshot-position.txt";
   int cdc_retries = 10;          // CDC 断线重连次数
+  std::string cdc_slot = "migrator_slot";
+  std::string pg_cdc_position_path = "out/pg-cdc-position.txt";
   std::string sslmode = "prefer";           // PostgreSQL/openGauss
   std::string mysql_ssl_mode = "PREFERRED"; // DISABLED/PREFERRED/REQUIRED
   bool do_verify = true;
@@ -231,6 +234,11 @@ class ITarget {
   virtual std::string analyze_sql(const std::string& table) {
     return "ANALYZE \"" + table + "\";";
   }
+  virtual std::string delete_sql(const std::string& table,
+                                 const std::string& pk,
+                                 const std::string& literal) {
+    return "DELETE FROM \"" + table + "\" WHERE \"" + pk + "\" = " + literal + ";";
+  }
   virtual Status drop_table(const std::string& table) {
     (void)table;
     return Status::Err(Code::kUnsupported, "drop_table not supported");
@@ -276,6 +284,7 @@ std::shared_ptr<ITarget> make_target(const Options& o, Status& st);
 Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget& tgt,
                      Metrics& m);
 Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m);
+Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m);
 
 void write_log_file(Metrics& m, const std::string& dir);
 

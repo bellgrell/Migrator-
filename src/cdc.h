@@ -37,6 +37,9 @@ class BinlogReader {
   uint64_t pos_ = 0;
 };
 
+Status apply_cdc_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev);
+
 Status run_cdc(const Options& o, Metrics& m, int max_events = 0);
+Status run_pg_cdc(const Options& o, Metrics& m, int max_events = 0);
 
 }  // namespace mig

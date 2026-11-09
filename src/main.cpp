@@ -51,9 +51,11 @@ void usage() {
       "  --consistent-snapshot         MySQL 一致性快照（单连接，自动 workers=1）\n"
       "  --resume                      按主键水位断点续传\n"
       "  --resume-dir <path>           断点文件目录（默认 out/resume）\n"
+      "  --repair                      校验后按主键补/删差异\n"
       "  --sslmode <mode>              PostgreSQL/openGauss sslmode（默认 prefer）\n"
       "  --mysql-ssl-mode <mode>       MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED\n"
       "  --cdc-retries <N>             CDC 断线重连次数（默认 10）\n"
+      "  --cdc-slot <name>             PG CDC 逻辑复制槽名（默认 migrator_slot）\n"
       "  --verify-only                 只校验不迁移\n"
       "\n"
       "CDC 增量:\n"
@@ -140,9 +142,11 @@ int main(int argc, char** argv) {
     else if (a == "--consistent-snapshot") { o.consistent_snapshot = true; o.workers = 1; o.pk_parallel = false; }
     else if (a == "--resume") { o.resume = true; o.pk_parallel = false; }
     else if (a == "--resume-dir") o.resume_dir = next();
+    else if (a == "--repair") o.repair = true;
     else if (a == "--sslmode") o.sslmode = next();
     else if (a == "--mysql-ssl-mode") o.mysql_ssl_mode = next();
     else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
+    else if (a == "--cdc-slot") o.cdc_slot = next();
     else if (a == "--exit") exit_after = true;
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
@@ -227,6 +231,11 @@ int main(int argc, char** argv) {
     src->connect();
     tgt->connect();
     mig::Status vr = mig::run_verify(o, *src, *tgt, m);
+    if (o.repair) {
+      mig::Status rr = mig::run_repair(o, *src, *tgt, m);
+      if (!rr.ok()) vr = rr;
+      else vr = mig::run_verify(o, *src, *tgt, m);
+    }
     mig::write_log_file(m, o.out_dir);
     std::printf("\n verify-only: %s\n", vr.ok() ? "PASS" : "FAIL");
     std::fflush(stdout);
@@ -267,10 +276,22 @@ int main(int argc, char** argv) {
     if (!vr.ok()) rc = vr;
   }
 
+  if (!cdc_only && o.repair) {
+    mig::Status rr = mig::run_repair(o, *src, *tgt, m);
+    if (!rr.ok()) {
+      rc = rr;
+    } else if (o.do_verify) {
+      mig::Status vr = mig::run_verify(o, *src, *tgt, m);
+      if (!vr.ok()) rc = vr;
+    }
+  }
+
   if (!cdc_only) src->end_snapshot();
 
   if (rc.ok() && o.cdc) {
-    mig::Status cr = mig::run_cdc(o, m, o.cdc_max_events);
+    mig::Status cr = (o.source_kind == "pg")
+                         ? mig::run_pg_cdc(o, m, o.cdc_max_events)
+                         : mig::run_cdc(o, m, o.cdc_max_events);
     if (!cr.ok()) {
       std::fprintf(stderr, "[cdc] %s\n", cr.str().c_str());
       rc = cr;

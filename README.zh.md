@@ -104,6 +104,8 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
 | `--mysql-ssl-mode` | PREFERRED | MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED |
 | `--cdc-retries` | 10 | CDC 断线重连次数 |
+| `--cdc-slot` | migrator_slot | PostgreSQL CDC 逻辑复制槽名 |
+| `--repair` | 关 | 校验后按主键补/删差异 |
 | `--consistent-snapshot` | 关 | 一致性快照（MySQL 用 binlog 位点；PG/openGauss 用 REPEATABLE READ），自动 workers=1 |
 | `--resume` | 关 | 按主键水位断点续传 |
 | `--resume-dir` | out/resume | 断点文件目录 |
@@ -138,7 +140,9 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 ## 限制
 
 - CDC 需要主键；无主键表会被跳过。
-- CDC 仅支持 MySQL 源（binlog ROW 事件）。
+- CDC 支持 MySQL 源（binlog ROW 事件）和 PostgreSQL 源（wal2json 逻辑解码）；PG CDC 目标必须是 PG/openGauss，不支持 MySQL。
+- PostgreSQL CDC 需要 `wal_level=logical`、在 `output_plugin_libraries` 中允许 `wal2json`，并创建复制槽；全量迁移期间的变化只有槽提前存在才能捕获。
+- `--repair` 需要单列主键，会在内存中保存主键集合，补缺失行、删多余行，然后重新校验。
 - 不支持的列类型：BIT、ENUM、SET、GEOMETRY。
 - DDL 方言转换有限；复杂的 MySQL 专用 DDL 可能需要手工改写。
 - DM8 尚未实现。
