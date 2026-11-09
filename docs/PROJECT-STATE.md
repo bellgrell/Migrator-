@@ -65,6 +65,13 @@ C++17 写的**异构数据迁移工具**：从 MySQL 全量迁移到 PostgreSQL/
 | openGauss 6.0.0：511 万行 | 11.33s → 451k rows/s（4 区间并行），checksum PASS |
 | openGauss 6.0.0：视图 | `v_user_stats` 迁移成功，verify PASS |
 | openGauss 6.0.0：CDC | INSERT/UPDATE/DELETE + DDL（ADD COLUMN）5 事件，0 错误，目标与源一致 |
+| 最终实测：MySQL → openGauss | 7,110,000 行 / 15.43s / 461k rows/s | PASS |
+| 最终实测：PG → openGauss | 5,110,000 行 / 19.32s / 264k rows/s | PASS |
+| 最终实测：openGauss → PG | 5,110,000 行 / 17.39s / 294k rows/s | PASS |
+| 最终实测：openGauss → MySQL | 5,110,000 行 / 23.57s / 217k rows/s | PASS |
+
+> 最终实测使用当前构建（含 LOAD DATA、多方向、CDC 修复）；MySQL 源库含 2 张 100 万行临时基准表，
+> 故 MySQL→openGauss 为 711 万行，其余为 511 万行。bench/opengauss-final.sh 可复现。
 | PG → openGauss | demo 库 100,010 行 / 0.59s，checksum PASS |
 | openGauss → PG | 5,110,000 行 / 15.71s，checksum PASS |
 | PG → MySQL | demo 库 100,010 行 / 1.30s，checksum PASS |
