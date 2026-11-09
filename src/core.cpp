@@ -11,6 +11,61 @@
 
 namespace mig {
 
+bool module_compiled(const std::string& name) {
+#ifdef MIG_ENABLE_PG_CDC
+  if (name == "pg_cdc") return true;
+#else
+  if (name == "pg_cdc") return false;
+#endif
+#ifdef MIG_ENABLE_REPAIR
+  if (name == "repair") return true;
+#else
+  if (name == "repair") return false;
+#endif
+#ifdef MIG_ENABLE_METRICS
+  if (name == "metrics") return true;
+#else
+  if (name == "metrics") return false;
+#endif
+#ifdef MIG_ENABLE_SNAPSHOT
+  if (name == "snapshot") return true;
+#else
+  if (name == "snapshot") return false;
+#endif
+#ifdef MIG_ENABLE_RESUME
+  if (name == "resume") return true;
+#else
+  if (name == "resume") return false;
+#endif
+  return true;
+}
+
+Status load_modules_config(const std::string& path, Options& o) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return Status::OK();
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  const std::string s = ss.str();
+  const char* names[] = {"pg_cdc", "repair", "metrics", "snapshot", "resume"};
+  for (const char* n : names) {
+    const std::string key = std::string("\"") + n + "\"";
+    const size_t p = s.find(key);
+    if (p == std::string::npos) continue;
+    const size_t c = s.find(':', p + key.size());
+    if (c == std::string::npos) continue;
+    size_t v = s.find_first_not_of(" \t\r\n", c + 1);
+    if (v == std::string::npos) continue;
+    const bool on = !(s.compare(v, 5, "false") == 0 || s[v] == '0');
+    if (!on) {
+      bool exists = false;
+      for (const auto& m : o.disabled_modules)
+        if (m == n) { exists = true; break; }
+      if (!exists) o.disabled_modules.push_back(n);
+    }
+  }
+  return Status::OK();
+}
+
 std::string Status::str() const {
   if (code == Code::kOk) return "OK";
   const char* n = "Unknown";

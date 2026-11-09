@@ -105,6 +105,7 @@ struct Options {
   std::vector<std::string> only_tables;     // 仅迁移这些表
   std::vector<std::string> exclude_tables;  // 排除这些表
   std::vector<std::string> disabled_modules;  // 运行时禁用的模块
+  std::string modules_config_path = "config/modules.json";
 
   bool module_enabled(const std::string& name) const {
     for (const auto& m : disabled_modules)
@@ -276,6 +277,9 @@ struct TypeMap {
 Status compute_checksum(ISource& src, const std::string& table, int batch,
                         Checksum& out);
 bool checksum_equal(const Checksum& a, const Checksum& b);
+
+bool module_compiled(const std::string& name);
+Status load_modules_config(const std::string& path, Options& o);
 
 std::string build_ddl(const TableSchema& s);
 std::string build_ddl_mysql(const TableSchema& s);

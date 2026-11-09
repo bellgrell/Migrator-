@@ -1,5 +1,8 @@
 #include "migrator.h"
 
+#include <fstream>
+#include <sstream>
+
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -70,13 +73,20 @@ void handle(socket_t fd, Metrics& m) {
   buf[n] = 0;
 
   std::string req(buf);
+  std::string method = "GET";
   std::string path = "/";
   {
     const size_t sp1 = req.find(' ');
     if (sp1 != std::string::npos) {
+      method = req.substr(0, sp1);
       const size_t sp2 = req.find(' ', sp1 + 1);
       if (sp2 != std::string::npos) path = req.substr(sp1 + 1, sp2 - sp1 - 1);
     }
+  }
+  std::string req_body;
+  {
+    const size_t hdr = req.find("\r\n\r\n");
+    if (hdr != std::string::npos) req_body = req.substr(hdr + 4);
   }
   const size_t q = path.find('?');
   if (q != std::string::npos) path = path.substr(0, q);
@@ -101,6 +111,48 @@ void handle(socket_t fd, Metrics& m) {
     body = m.events_json();
   } else if (path == "/api/series") {
     body = m.series_json();
+  } else if (path == "/api/modules") {
+    ctype = "application/json; charset=utf-8";
+    if (method == "POST") {
+      std::string b = req_body;
+      const size_t s = b.find_first_not_of(" \t\r\n");
+      if (s != std::string::npos) b = b.substr(s);
+      while (!b.empty() && (b.back() == '\n' || b.back() == '\r' || b.back() == ' '))
+        b.pop_back();
+      if (b.size() < 2 || b.front() != '{' || b.back() != '}') {
+        code = 400;
+        body = "{\"error\":\"bad json\"}";
+      } else {
+        std::ofstream out("config/modules.json", std::ios::trunc);
+        out << b;
+        body = "{\"ok\":true,\"restart_required\":true}";
+      }
+    } else {
+      std::string cfg;
+      std::ifstream in("config/modules.json");
+      if (in) { std::ostringstream ss; ss << in.rdbuf(); cfg = ss.str(); }
+      auto on = [&](const char* n, bool def) {
+        const std::string key = std::string("\"") + n + "\"";
+        const size_t p = cfg.find(key);
+        if (p == std::string::npos) return def;
+        const size_t c = cfg.find(':', p + key.size());
+        if (c == std::string::npos) return def;
+        const size_t v = cfg.find_first_not_of(" \t\r\n", c + 1);
+        if (v == std::string::npos) return def;
+        return !(cfg.compare(v, 5, "false") == 0 || cfg[v] == '0');
+      };
+      body = "{\"pg_cdc\":";
+      body += on("pg_cdc", true) ? "true" : "false";
+      body += ",\"repair\":";
+      body += on("repair", true) ? "true" : "false";
+      body += ",\"metrics\":";
+      body += on("metrics", true) ? "true" : "false";
+      body += ",\"snapshot\":";
+      body += on("snapshot", true) ? "true" : "false";
+      body += ",\"resume\":";
+      body += on("resume", true) ? "true" : "false";
+      body += "}";
+    }
   } else if (path == "/api/health") {
     body = "{\"ok\":true}";
   } else if (path == "/api/features") {

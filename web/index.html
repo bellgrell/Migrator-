@@ -64,6 +64,9 @@
   .chip{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
   .chip.on{background:rgba(61,220,151,.15);color:var(--ok);border-color:rgba(61,220,151,.4)}
   .chip.off{background:#1b2740;color:var(--dim)}
+  .chip input{margin-right:4px}
+  .btn{background:#1f6feb;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer}
+  .btn:hover{background:#2b7cf0}
 </style>
 </head>
 <body>
@@ -135,6 +138,11 @@
   <section class="panel">
     <h2 data-i18n="modulesTitle">Modules</h2>
     <div class="chips" id="features"></div>
+    <div class="chips" id="moduleForm" style="margin-top:10px"></div>
+    <div style="margin-top:10px">
+      <button id="saveModules" class="btn" data-i18n="saveModules">Save</button>
+      <span id="moduleMsg" class="dim" style="margin-left:8px"></span>
+    </div>
     <div class="dim" style="margin-top:8px;font-size:12px" data-i18n="modulesHint">Compiled-in modules; rebuild to change.</div>
   </section>
 </main>
@@ -150,6 +158,7 @@ var I18N = {
     verifyPassed: "校验：通过 ✓", verifyFailed: "校验：失败 {n} 张表",
     chartTitle: "实时吞吐（rows/s）", tablesTitle: "表进度", eventsTitle: "事件流",
     modulesTitle: "模块", modulesHint: "编译期模块，修改需重新编译", on: "开启", off: "关闭",
+    saveModules: "保存模块配置", savedRestart: "已保存，重启 migrator 后生效", notCompiled: "未编译", saveFailed: "保存失败",
     tableName: "表名", status: "状态", done: "已迁移", total: "总数",
     errorsCol: "错误", progressCol: "进度",
     waitingData: "等待数据…", waitingSample: "等待采样…",
@@ -166,7 +175,8 @@ var I18N = {
     verifyWaiting: "verify: waiting", verifyRunning: "verify: running…",
     verifyPassed: "verify: passed ✓", verifyFailed: "verify: failed ({n} tables)",
     chartTitle: "Live throughput (rows/s)", tablesTitle: "Table progress",
-    eventsTitle: "Event stream", modulesTitle: "Modules", modulesHint: "Compiled-in modules; rebuild to change.", on: "on", off: "off", tableName: "Table", status: "Status",
+    eventsTitle: "Event stream", modulesTitle: "Modules", modulesHint: "Compiled-in modules; rebuild to change.", on: "on", off: "off",
+    saveModules: "Save modules", savedRestart: "Saved; restart migrator to apply", notCompiled: "not compiled", saveFailed: "save failed", tableName: "Table", status: "Status",
     done: "Done", total: "Total", errorsCol: "Errors", progressCol: "Progress",
     waitingData: "waiting for data…", waitingSample: "waiting for samples…",
     disconnected: "disconnected, retrying…",
@@ -182,7 +192,8 @@ var I18N = {
     verifyWaiting: "проверка: ожидание", verifyRunning: "проверка: выполняется…",
     verifyPassed: "проверка: успешно ✓", verifyFailed: "проверка: ошибок таблиц: {n}",
     chartTitle: "Текущая пропускная способность (строк/с)", tablesTitle: "Прогресс таблиц",
-    eventsTitle: "Поток событий", modulesTitle: "Модули", modulesHint: "Модули задаются при сборке; для изменения пересоберите.", on: "вкл.", off: "выкл.", tableName: "Таблица", status: "Статус",
+    eventsTitle: "Поток событий", modulesTitle: "Модули", modulesHint: "Модули задаются при сборке; для изменения пересоберите.", on: "вкл.", off: "выкл.",
+    saveModules: "Сохранить модули", savedRestart: "Сохранено; перезапустите migrator", notCompiled: "не собран", saveFailed: "ошибка сохранения", tableName: "Таблица", status: "Статус",
     done: "Перенесено", total: "Всего", errorsCol: "Ошибки", progressCol: "Прогресс",
     waitingData: "ожидание данных…", waitingSample: "ожидание замеров…",
     disconnected: "соединение потеряно, повтор…",
@@ -196,7 +207,7 @@ function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { retur
 function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 var lang = storeGet('mm-lang') || (navigator.language || 'en').slice(0, 2);
 if (lang !== 'zh' && lang !== 'ru') lang = 'en';
-var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null, lastFeatures = null;
+var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null, lastFeatures = null, moduleConfig = null;
 
 function t(k) {
   return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k;
@@ -325,7 +336,6 @@ function renderEvents(list){
 function renderFeatures(f){
   lastFeatures = f;
   var box = document.getElementById('features');
-  if (!box) return;
   var keys = ['pg_cdc','repair','metrics','snapshot','resume'];
   var html = '';
   for (var i = 0; i < keys.length; i++) {
@@ -333,8 +343,47 @@ function renderFeatures(f){
     var on = !!(f && f[k]);
     html += '<span class="chip ' + (on ? 'on' : 'off') + '">' + k + ' ' + (on ? t('on') : t('off')) + '</span>';
   }
-  box.innerHTML = html;
+  if (box) box.innerHTML = html;
+
+  var form = document.getElementById('moduleForm');
+  if (!form) return;
+  var fh = '';
+  for (var j = 0; j < keys.length; j++) {
+    var m = keys[j];
+    if (f && f[m]) {
+      var checked = !moduleConfig || moduleConfig[m] !== false;
+      fh += '<label class="chip ' + (checked ? 'on' : 'off') + '"><input type="checkbox" data-mod="' + m + '" ' + (checked ? 'checked' : '') + '> ' + m + '</label>';
+    } else {
+      fh += '<span class="chip off">' + m + ' (' + t('notCompiled') + ')</span>';
+    }
+  }
+  form.innerHTML = fh;
 }
+
+async function loadModules(){
+  try {
+    var r = await fetch('/api/modules', {cache:'no-store'});
+    moduleConfig = await r.json();
+    if (lastFeatures) renderFeatures(lastFeatures);
+  } catch (e) {}
+}
+
+async function saveModules(){
+  var boxes = document.querySelectorAll('#moduleForm input[data-mod]');
+  var out = {};
+  for (var i = 0; i < boxes.length; i++) out[boxes[i].getAttribute('data-mod')] = boxes[i].checked;
+  var msg = document.getElementById('moduleMsg');
+  try {
+    var r = await fetch('/api/modules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(out)});
+    var j = await r.json();
+    msg.textContent = j.restart_required ? t('savedRestart') : t('saveModules');
+    moduleConfig = out;
+    renderFeatures(lastFeatures);
+  } catch (e) {
+    msg.textContent = t('saveFailed');
+  }
+}
+window.saveModules = saveModules;
 
 function drawChart(series){
   lastSeries = series;
@@ -390,6 +439,7 @@ async function tick(){
     drawChart(await rq.json());
     var rf=await fetch('/api/features',{cache:'no-store'});
     renderFeatures(await rf.json());
+    if (moduleConfig === null) await loadModules();
   }catch(e){
     document.getElementById('meta').textContent=t('disconnected');
   }
@@ -397,6 +447,7 @@ async function tick(){
 applyLang();
 tick();
 setInterval(tick, 600);
+document.getElementById('saveModules').addEventListener('click', saveModules);
 window.addEventListener('resize', function(){ drawChart(lastSeries||[]); });
 </script>
 </body>

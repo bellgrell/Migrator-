@@ -1,0 +1,7 @@
+{
+  "pg_cdc": true,
+  "repair": true,
+  "metrics": true,
+  "snapshot": true,
+  "resume": true
+}

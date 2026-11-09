@@ -103,6 +103,7 @@ void usage() {
       "  --only-tables <a,b,c>         只迁移指定表（逗号分隔）\n"
       "  --exclude-tables <a,b,c>      排除指定表\n"
       "  --disable-modules <a,b,c>     运行时禁用模块（pg_cdc/repair/metrics/snapshot/resume）\n"
+      "  --modules-config <path>       模块配置文件（默认 config/modules.json）\n"
       "  --exit                        迁移完退出\n"
       "  --features                    显示编译进来的模块\n"
       "  -h, --help                    显示帮助\n");
@@ -201,11 +202,14 @@ int main(int argc, char** argv) {
     else if (a == "--only-tables") o.only_tables = split_list(next());
     else if (a == "--exclude-tables") o.exclude_tables = split_list(next());
     else if (a == "--disable-modules") o.disabled_modules = split_list(next());
+    else if (a == "--modules-config") o.modules_config_path = next();
     else if (a == "--exit") exit_after = true;
     else if (a == "--features") { print_features(); return 0; }
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }
   }
+
+  if (!o.modules_config_path.empty()) load_modules_config(o.modules_config_path, o);
 
   if (o.consistent_snapshot && !o.module_enabled("snapshot")) {
     std::fprintf(stderr, "[fatal] snapshot module disabled\n");

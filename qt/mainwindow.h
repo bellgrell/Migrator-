@@ -35,6 +35,8 @@ class MainWindow : public QMainWindow {
   void setRunning(bool running);
   QString findTypeMap() const;
   void appendLog(const QString& line);
+  void loadModuleConfig();
+  void saveModuleConfig() const;
 
   QComboBox* mode_ = nullptr;
   QLineEdit* source_ = nullptr;
@@ -45,6 +47,11 @@ class MainWindow : public QMainWindow {
   QSpinBox* throttleSpin_ = nullptr;
   QSpinBox* workersSpin_ = nullptr;
   QCheckBox* verifyChk_ = nullptr;
+  QCheckBox* pgCdcChk_ = nullptr;
+  QCheckBox* repairChk_ = nullptr;
+  QCheckBox* metricsChk_ = nullptr;
+  QCheckBox* snapshotChk_ = nullptr;
+  QCheckBox* resumeChk_ = nullptr;
   QPushButton* startBtn_ = nullptr;
 
   QProgressBar* progress_ = nullptr;

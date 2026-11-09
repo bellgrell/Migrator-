@@ -158,6 +158,7 @@ QString fmtBytes(long long b) {
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("mini-migrator — 数据库迁移");
   buildUi();
+  loadModuleConfig();
 
   timer_ = new QTimer(this);
   timer_->setInterval(400);
@@ -269,6 +270,12 @@ void MainWindow::buildUi() {
   verifyChk_ = new QCheckBox("迁移后校验", central);
   verifyChk_->setChecked(true);
 
+  pgCdcChk_ = new QCheckBox("PostgreSQL CDC", central);
+  repairChk_ = new QCheckBox("差异修复", central);
+  metricsChk_ = new QCheckBox("Prometheus 指标", central);
+  snapshotChk_ = new QCheckBox("一致性快照", central);
+  resumeChk_ = new QCheckBox("断点续传", central);
+
   startBtn_ = new QPushButton("开始迁移", central);
   connect(startBtn_, &QPushButton::clicked, this, &MainWindow::onStart);
 
@@ -297,6 +304,14 @@ void MainWindow::buildUi() {
   form->addWidget(new QLabel("并行", central), r, 0);
   form->addWidget(workersSpin_, r, 1);
   form->addWidget(verifyChk_, r, 6);
+
+  ++r;
+  form->addWidget(new QLabel("模块", central), r, 0);
+  form->addWidget(pgCdcChk_, r, 1);
+  form->addWidget(repairChk_, r, 2);
+  form->addWidget(metricsChk_, r, 3);
+  form->addWidget(snapshotChk_, r, 4);
+  form->addWidget(resumeChk_, r, 5);
 
   form->setColumnStretch(1, 3);
   form->setColumnStretch(3, 3);
@@ -365,6 +380,48 @@ void MainWindow::setRunning(bool running) {
   workersSpin_->setEnabled(!running);
 }
 
+void MainWindow::loadModuleConfig() {
+  QJsonObject cfg;
+  const QStringList cands = {"config/modules.json", "../config/modules.json",
+                             "../../config/modules.json"};
+  for (const auto& p : cands) {
+    QFile f(p);
+    if (f.open(QIODevice::ReadOnly)) {
+      cfg = QJsonDocument::fromJson(f.readAll()).object();
+      break;
+    }
+  }
+  auto set = [&](QCheckBox* c, const char* n) {
+    const bool avail = mig::module_compiled(n);
+    c->setChecked(avail && cfg.value(n).toBool(true));
+    c->setEnabled(avail);
+    if (!avail) c->setToolTip("未编译");
+  };
+  set(pgCdcChk_, "pg_cdc");
+  set(repairChk_, "repair");
+  set(metricsChk_, "metrics");
+  set(snapshotChk_, "snapshot");
+  set(resumeChk_, "resume");
+}
+
+void MainWindow::saveModuleConfig() const {
+  QJsonObject o;
+  o["pg_cdc"] = pgCdcChk_->isChecked();
+  o["repair"] = repairChk_->isChecked();
+  o["metrics"] = metricsChk_->isChecked();
+  o["snapshot"] = snapshotChk_->isChecked();
+  o["resume"] = resumeChk_->isChecked();
+  QString path = "config/modules.json";
+  if (!QFile::exists(path)) {
+    if (QFile::exists("../config/modules.json")) path = "../config/modules.json";
+    else if (QFile::exists("../../config/modules.json")) path = "../../config/modules.json";
+  }
+  QFile f(path);
+  if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    f.write(QJsonDocument(o).toJson(QJsonDocument::Indented));
+  }
+}
+
 void MainWindow::onStart() {
   if (running_) return;
 
@@ -383,6 +440,17 @@ void MainWindow::onStart() {
   o.sim_tables = tablesSpin_->value();
   o.do_verify = verifyChk_->isChecked();
   o.type_map_path = findTypeMap().toStdString();
+  o.consistent_snapshot = snapshotChk_->isChecked();
+  o.resume = resumeChk_->isChecked();
+  o.repair = repairChk_->isChecked();
+  if (!pgCdcChk_->isChecked()) o.disabled_modules.push_back("pg_cdc");
+  if (!repairChk_->isChecked()) o.disabled_modules.push_back("repair");
+  if (!metricsChk_->isChecked()) o.disabled_modules.push_back("metrics");
+  if (!snapshotChk_->isChecked()) o.disabled_modules.push_back("snapshot");
+  if (!resumeChk_->isChecked()) o.disabled_modules.push_back("resume");
+  if (o.consistent_snapshot) { o.workers = 1; o.pk_parallel = false; }
+  if (o.resume) o.pk_parallel = false;
+  saveModuleConfig();
 
   mig::TypeMap tm;
   mig::Status ts = tm.load(o.type_map_path);
@@ -416,6 +484,10 @@ void MainWindow::onStart() {
     mig::Status rc = mig::run_migration(o, tm, *src, *tgt, *mm);
     if (rc.ok() && o.do_verify) {
       mig::run_verify(o, *src, *tgt, *mm);
+    }
+    if (o.repair) {
+      mig::Status rr = mig::run_repair(o, *src, *tgt, *mm);
+      if (!rr.ok()) mm->log("[error] repair: " + rr.str());
     }
     mig::write_log_file(*mm, o.out_dir);
   });
