@@ -5,3 +5,6 @@ data/
 *.o
 *.a
 .DS_Store
+
+# generated test artifacts
+out/
