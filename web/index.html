@@ -67,7 +67,7 @@
   <div class="brand">mini<span>-migrator</span></div>
   <div class="meta" id="meta" data-i18n="connecting">connecting…</div>
   <div class="spacer"></div>
-  <select id="lang" class="lang" onchange="setLang(this.value)">
+  <select id="lang" class="lang">
     <option value="zh">中文</option>
     <option value="en">English</option>
     <option value="ru">Русский</option>
@@ -181,7 +181,9 @@ var I18N = {
   }
 };
 
-var lang = localStorage.getItem('mm-lang') || (navigator.language || 'en').slice(0, 2);
+function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+var lang = storeGet('mm-lang') || (navigator.language || 'en').slice(0, 2);
 if (lang !== 'zh' && lang !== 'ru') lang = 'en';
 var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null;
 
@@ -205,9 +207,11 @@ function applyLang() {
 }
 function setLang(v) {
   lang = v;
-  localStorage.setItem('mm-lang', v);
+  storeSet('mm-lang', v);
   applyLang();
 }
+window.setLang = setLang;
+document.getElementById('lang').addEventListener('change', function(){ setLang(this.value); });
 
 var lastDone = 0, lastT = 0, rps = 0;
 function fmt(n){ return (n||0).toLocaleString('en-US'); }
