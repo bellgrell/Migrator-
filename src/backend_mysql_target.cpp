@@ -71,6 +71,16 @@ class MySqlTarget : public ITarget {
   Status connect() override {
     conn_ = mysql_init(nullptr);
     if (!conn_) return Status::Err(Code::kDb, "mysql_init failed");
+    unsigned int ct = (unsigned int)(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10);
+    mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
+    mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
+    mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
+    unsigned int sm = SSL_MODE_PREFERRED;
+    if (opts_.mysql_ssl_mode == "DISABLED") sm = SSL_MODE_DISABLED;
+    else if (opts_.mysql_ssl_mode == "REQUIRED") sm = SSL_MODE_REQUIRED;
+    mysql_options(conn_, MYSQL_OPT_SSL_MODE, &sm);
+#endif
     unsigned int li = 1;
     mysql_options(conn_, MYSQL_OPT_LOCAL_INFILE, &li);
 
@@ -93,6 +103,10 @@ class MySqlTarget : public ITarget {
     mysql_autocommit(conn_, 0);
     load_enabled_ = server_local_infile();
     return Status::OK();
+  }
+
+  Status drop_table(const std::string& table) override {
+    return exec_sql("DROP TABLE IF EXISTS `" + table + "`;");
   }
 
   Status create_table(const TableSchema& s, const std::string& ddl) override {

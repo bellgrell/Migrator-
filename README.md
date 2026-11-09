@@ -98,6 +98,12 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--cdc-only` | off | Run CDC only |
 | `--cdc-ddl` | off | Apply DDL changes from binlog |
 | `--exit` | off | Exit after migration |
+| `--connect-timeout` | 10 | Connect/read/write timeout in seconds |
+| `--connect-retries` | 3 | Connection retry attempts |
+| `--truncate` | off | Drop target tables before migration (safe rerun) |
+| `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
+| `--mysql-ssl-mode` | PREFERRED | MySQL SSL mode: DISABLED/PREFERRED/REQUIRED |
+| `--cdc-retries` | 10 | CDC reconnect attempts |
 
 DSN format: `host=...;port=...;user=...;password=...;db=...`.
 
@@ -134,7 +140,10 @@ Typical table-level results with the same dataset:
 - DDL dialect conversion is limited; complex MySQL-specific DDL may need manual rewriting.
 - DM8 is not implemented.
 - PostgreSQL → MySQL view migration is not implemented yet.
-- Target tables should be empty or already aligned; re-running into a non-empty table will hit primary-key conflicts.
+- Target tables should be empty or already aligned; use `--truncate` to drop and recreate them for a safe rerun.
+- Checksum read failures make verification FAIL instead of being silently skipped.
+- Full-load connections retry with backoff; CDC reconnects from the last committed binlog position.
+- For remote databases, open the DB port, allow the client host in grants/firewall, and use SSH tunnel/VPN if needed.
 - PostgreSQL/openGauss sources currently use a single sequential cursor; single-table range parallelism is implemented for MySQL sources only.
 - MySQL target bulk load uses `LOAD DATA LOCAL INFILE`; the server must have `local_infile=ON`. Tables with binary columns automatically fall back to batched INSERT.
 - openGauss target databases should be created with `DBCOMPATIBILITY='PG'`; if the account uses sha256 authentication, native libpq may require switching the migration account to md5.

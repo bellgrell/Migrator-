@@ -125,6 +125,10 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
         std::to_string(job.schema.indexes.size()) + " secondary indexes)");
   m.log("DDL for " + job.name + ":\n" + job.ddl);
 
+  if (o.truncate_target) {
+    Status ds = tgt.drop_table(job.name);
+    if (!ds.ok()) m.log("[warn] drop_table " + job.name + ": " + ds.str());
+  }
   Status st = tgt.create_table(job.schema, job.ddl);
   if (!st.ok()) {
     m.log("[error] create_table " + job.name + ": " + st.str());
@@ -267,6 +271,10 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
         std::to_string(lo) + ", " + std::to_string(hi) + "] on " + pk->name);
   m.log("DDL for " + job.name + ":\n" + job.ddl);
 
+  if (o.truncate_target) {
+    Status ds = tgt.drop_table(job.name);
+    if (!ds.ok()) m.log("[warn] drop_table " + job.name + ": " + ds.str());
+  }
   Status st = tgt.create_table(job.schema, job.ddl);
   if (!st.ok()) {
     m.log("[error] create_table " + job.name + ": " + st.str());
@@ -520,6 +528,22 @@ bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
   return !jobs.empty() || !rebuilds.empty();
 }
 
+template <typename F>
+Status connect_retry(const Options& o, Metrics& m, const char* what, F fn) {
+  Status st;
+  const int tries = o.connect_retries > 0 ? o.connect_retries : 0;
+  for (int i = 0; i <= tries; ++i) {
+    st = fn();
+    if (st.ok()) return st;
+    if (i == tries) break;
+    m.log(std::string("[warn] ") + what + " connect failed: " + st.str() +
+          ", retry " + std::to_string(i + 1) + "/" + std::to_string(tries));
+    std::this_thread::sleep_for(std::chrono::milliseconds(
+        (o.connect_backoff_ms > 0 ? o.connect_backoff_ms : 500) * (i + 1)));
+  }
+  return st;
+}
+
 void run_parallel(const Options& o, const std::vector<TableJob>& jobs, Metrics& m) {
   const int n = std::max(1, std::min<int>(o.workers, (int)jobs.size()));
   m.log("parallel mode: " + std::to_string(n) + " worker(s)");
@@ -567,7 +591,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
         (o.build_indexes ? "on" : "off") + " analyze=" +
         (o.analyze_after ? "on" : "off"));
 
-  Status st = src.connect();
+  Status st = connect_retry(o, m, "source", [&]() { return src.connect(); });
   if (!st.ok()) {
     m.log("[error] source connect: " + st.str());
     m.running = false;
@@ -576,7 +600,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     m.phase = "error";
     return st;
   }
-  st = tgt.connect();
+  st = connect_retry(o, m, "target", [&]() { return tgt.connect(); });
   if (!st.ok()) {
     m.log("[error] target connect: " + st.str());
     m.running = false;
@@ -779,9 +803,11 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
       dst = make_pg_source(o, st);
     }
     if (!dst) {
-      m.log("[warn] checksum skipped: cannot create verifier");
+      ++mismatch;
+      m.log("[error] checksum: cannot create verifier");
     } else if (!dst->connect().ok()) {
-      m.log("[warn] checksum skipped: pg source connect failed");
+      ++mismatch;
+      m.log("[error] checksum: verifier connect failed");
     } else {
       m.log("computing checksums (source vs target)...");
       for (auto& t : snapshot) {
@@ -790,7 +816,8 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         const Status sa = compute_checksum(src, t->name, 2000, a);
         const Status sb = compute_checksum(*dst, t->name, 2000, b);
         if (!sa.ok() || !sb.ok()) {
-          m.log("[warn] checksum " + t->name + ": " +
+          ++mismatch;
+          m.log("[mismatch] checksum " + t->name + ": " +
                 (sa.ok() ? sb.str() : sa.str()));
           continue;
         }

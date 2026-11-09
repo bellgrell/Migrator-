@@ -94,6 +94,13 @@ struct Options {
   bool pk_parallel = true;   // 单表按主键区间并行
   int log_every = 10;
   int http_port = 8123;
+  int connect_timeout = 10;      // 连接/读写超时（秒）
+  int connect_retries = 3;       // 连接失败重试次数
+  int connect_backoff_ms = 500;  // 重试退避基数（毫秒）
+  bool truncate_target = false;  // 迁移前 DROP 目标表，便于失败后重跑
+  int cdc_retries = 10;          // CDC 断线重连次数
+  std::string sslmode = "prefer";           // PostgreSQL/openGauss
+  std::string mysql_ssl_mode = "PREFERRED"; // DISABLED/PREFERRED/REQUIRED
   bool do_verify = true;
   bool build_indexes = true;
   bool analyze_after = true;
@@ -207,6 +214,10 @@ class ITarget {
   }
   virtual std::string analyze_sql(const std::string& table) {
     return "ANALYZE \"" + table + "\";";
+  }
+  virtual Status drop_table(const std::string& table) {
+    (void)table;
+    return Status::Err(Code::kUnsupported, "drop_table not supported");
   }
   virtual std::string describe() = 0;
 };

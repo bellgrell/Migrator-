@@ -135,6 +135,13 @@ class SimTarget : public ITarget {
 
   Status exec_sql(const std::string&) override { return Status::OK(); }
 
+  Status drop_table(const std::string& table) override {
+    std::lock_guard<std::mutex> lk(sim_registry_mu());
+    sim_registry().erase(table);
+    ddl_.erase(table);
+    return Status::OK();
+  }
+
   Status create_table(const TableSchema& s, const std::string& ddl) override {
     std::lock_guard<std::mutex> lk(sim_registry_mu());
     sim_registry()[s.name] += 0;

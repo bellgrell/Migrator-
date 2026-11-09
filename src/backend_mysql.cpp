@@ -45,6 +45,16 @@ class MySqlSource : public ISource {
   Status connect() override {
     conn_ = mysql_init(nullptr);
     if (!conn_) return Status::Err(Code::kDb, "mysql_init failed");
+    unsigned int ct = (unsigned int)(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10);
+    mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
+    mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
+    mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
+    unsigned int sm = SSL_MODE_PREFERRED;
+    if (opts_.mysql_ssl_mode == "DISABLED") sm = SSL_MODE_DISABLED;
+    else if (opts_.mysql_ssl_mode == "REQUIRED") sm = SSL_MODE_REQUIRED;
+    mysql_options(conn_, MYSQL_OPT_SSL_MODE, &sm);
+#endif
     const std::string& dsn =
         opts_.mysql_source_dsn.empty() ? opts_.source : opts_.mysql_source_dsn;
     const std::string host = dsn_get(dsn, "host", "127.0.0.1");

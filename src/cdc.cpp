@@ -3,6 +3,7 @@
 #include <mysql/mysql.h>
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -766,14 +768,47 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
 
   std::unordered_map<std::string, TableSchema> schemas;
   int applied = 0;
+  std::string last_file = file;
+  uint64_t last_pos = pos;
+  int reconnects = 0;
 
   while (true) {
     bool has = false;
     std::vector<CdcEvent> events;
     st = reader.next(has, events);
     if (!st.ok()) {
-      m.log("[error] cdc: " + st.str());
-      return st;
+      const int max_retry = o.cdc_retries > 0 ? o.cdc_retries : 0;
+      if (reconnects >= max_retry) {
+        m.log("[error] cdc: " + st.str());
+        return st;
+      }
+      ++reconnects;
+      m.log("[warn] cdc disconnected: " + st.str() + ", reconnect from " +
+            last_file + ":" + std::to_string(last_pos));
+      reader.close();
+      Status rs;
+      for (int i = 0; i <= (o.connect_retries > 0 ? o.connect_retries : 0); ++i) {
+        if (i) std::this_thread::sleep_for(std::chrono::milliseconds(
+            (o.connect_backoff_ms > 0 ? o.connect_backoff_ms : 500) * i));
+        rs = reader.open(o, last_file, last_pos);
+        if (rs.ok()) break;
+      }
+      if (!rs.ok()) {
+        m.log("[error] cdc reopen: " + rs.str());
+        return rs;
+      }
+      src = make_source(o, s1);
+      if (!src || !src->connect().ok()) {
+        m.log("[error] cdc source reconnect failed");
+        return Status::Err(Code::kDb, "cdc source reconnect failed");
+      }
+      tgt->close();
+      if (!tgt->connect().ok()) {
+        m.log("[error] cdc target reconnect failed");
+        return Status::Err(Code::kDb, "cdc target reconnect failed");
+      }
+      schemas.clear();
+      continue;
     }
     if (!has) continue;
 
@@ -837,6 +872,9 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
 
     std::ofstream out(o.cdc_position_path, std::ios::trunc);
     out << reader.file() << ":" << reader.pos();
+    last_file = reader.file();
+    last_pos = reader.pos();
+    reconnects = 0;
     m.log("cdc applied " + std::to_string(applied) + " events, pos=" +
           std::to_string(reader.pos()));
 

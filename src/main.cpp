@@ -45,6 +45,12 @@ void usage() {
       "校验:\n"
       "  --no-checksum                 只比行数\n"
       "  --no-verify                   跳过校验\n"
+      "  --connect-timeout <sec>       连接/读写超时（默认 10）\n"
+      "  --connect-retries <N>         连接失败重试次数（默认 3）\n"
+      "  --truncate                    迁移前 DROP 目标表，便于重跑\n"
+      "  --sslmode <mode>              PostgreSQL/openGauss sslmode（默认 prefer）\n"
+      "  --mysql-ssl-mode <mode>       MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED\n"
+      "  --cdc-retries <N>             CDC 断线重连次数（默认 10）\n"
       "  --verify-only                 只校验不迁移\n"
       "\n"
       "CDC 增量:\n"
@@ -125,6 +131,12 @@ int main(int argc, char** argv) {
     else if (a == "--cdc-server-id") o.cdc_server_id = std::stoi(next());
     else if (a == "--cdc-max-events") o.cdc_max_events = std::stoi(next());
     else if (a == "--no-verify") o.do_verify = false;
+    else if (a == "--connect-timeout") o.connect_timeout = std::stoi(next());
+    else if (a == "--connect-retries") o.connect_retries = std::stoi(next());
+    else if (a == "--truncate") o.truncate_target = true;
+    else if (a == "--sslmode") o.sslmode = next();
+    else if (a == "--mysql-ssl-mode") o.mysql_ssl_mode = next();
+    else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
     else if (a == "--exit") exit_after = true;
     else if (a == "-h" || a == "--help") { usage(); return 0; }
     else { std::fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(); return 2; }

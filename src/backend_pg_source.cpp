@@ -10,6 +10,13 @@
 namespace mig {
 namespace {
 
+std::string cq(const std::string& v) {
+  std::string o = "'";
+  for (char c : v) { if (c == '\\' || c == '\'') o += '\\'; o += c; }
+  o += "'";
+  return o;
+}
+
 std::string dsn_get(const std::string& dsn, const std::string& key,
                     const std::string& def = "") {
   std::string marker = key;
@@ -71,8 +78,12 @@ class PgSource : public ISource {
     const std::string pw = dsn_get(dsn, pw_key, "");
     const std::string db = dsn_get(dsn, "db", "postgres");
 
-    conn_ = PQsetdbLogin(host.c_str(), port.c_str(), nullptr, nullptr,
-                         db.c_str(), user.c_str(), pw.c_str());
+    const std::string ci =
+        "host=" + cq(host) + " port=" + cq(port) + " user=" + cq(user) +
+        " password=" + cq(pw) + " dbname=" + cq(db) +
+        " connect_timeout=" + std::to_string(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10) +
+        " keepalives=1 keepalives_idle=30 sslmode=" + cq(opts_.sslmode);
+    conn_ = PQconnectdb(ci.c_str());
     if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
       std::string e = conn_ ? PQerrorMessage(conn_) : "PQsetdbLogin failed";
       if (conn_) { PQfinish(conn_); conn_ = nullptr; }

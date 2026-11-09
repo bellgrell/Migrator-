@@ -98,6 +98,12 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--cdc-only` | 关 | 只运行 CDC |
 | `--cdc-ddl` | 关 | 应用 binlog 中的 DDL 变更 |
 | `--exit` | 关 | 迁移后退出 |
+| `--connect-timeout` | 10 | 连接/读写超时（秒） |
+| `--connect-retries` | 3 | 连接失败重试次数 |
+| `--truncate` | 关 | 迁移前 DROP 目标表，便于重跑 |
+| `--sslmode` | prefer | PostgreSQL/openGauss sslmode |
+| `--mysql-ssl-mode` | PREFERRED | MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED |
+| `--cdc-retries` | 10 | CDC 断线重连次数 |
 
 DSN 格式：`host=...;port=...;user=...;password=...;db=...`。
 
@@ -134,7 +140,10 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 - DDL 方言转换有限；复杂的 MySQL 专用 DDL 可能需要手工改写。
 - DM8 尚未实现。
 - PostgreSQL → MySQL 的视图迁移尚未实现。
-- 目标表应为空或已对齐；向非空表重跑会撞主键。
+- 目标表应为空或已对齐；可用 `--truncate` 先 DROP 再重建，便于安全重跑。
+- checksum 读取失败会让校验直接 FAIL，不再静默跳过。
+- 全量连接失败会按退避重试；CDC 断线会从最后提交的 binlog 位点重连。
+- 远程数据库需要放行端口、在账号/防火墙中允许客户端 IP；必要时用 SSH 隧道或 VPN。
 - PostgreSQL/openGauss 源目前使用单游标顺序读取；单表区间并行只对 MySQL 源实现。
 - MySQL 目标批量导入使用 `LOAD DATA LOCAL INFILE`，服务端需要开启 `local_infile=ON`；含二进制列的表会自动回退为批量 INSERT。
 - openGauss 目标库应使用 `DBCOMPATIBILITY='PG'` 创建；如果账号使用 sha256 认证，原生 libpq 可能需要把迁移账号切换为 md5。
