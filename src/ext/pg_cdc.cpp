@@ -310,8 +310,9 @@ void save_position(const Options& o, const std::string& lsn) {
 Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
   if (!o.module_enabled("pg_cdc"))
     return Status::Err(Code::kUnsupported, "PG CDC module disabled");
-  if (o.source_kind != "pg")
-    return Status::Err(Code::kUnsupported, "PG CDC requires a PostgreSQL source");
+  if (o.source_kind != "pg" && o.source_kind != "og")
+    return Status::Err(Code::kUnsupported,
+                       "PG CDC requires a PostgreSQL/openGauss source");
   if (o.target_kind == "mysql")
     return Status::Err(Code::kUnsupported, "PG CDC target MySQL is not supported");
 
@@ -362,8 +363,10 @@ Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
   int applied = 0;
 
   while (true) {
+    // PostgreSQL 与 openGauss 的列名不同（lsn vs location），统一按位置取列：
+    // 0 = lsn/location, 1 = xid, 2 = data
     const std::string q =
-        "SELECT lsn::text, data FROM pg_logical_slot_peek_changes(" + cq(slot) +
+        "SELECT * FROM pg_logical_slot_peek_changes(" + cq(slot) +
         ", NULL, NULL, 'pretty-print', '0')";
     PGresult* r = PQexec(conn, q.c_str());
     if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
@@ -383,8 +386,9 @@ Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
     }
 
     for (int i = 0; i < n; ++i) {
+      const int nfields = PQnfields(r);
       const std::string lsn = PQgetvalue(r, i, 0);
-      const std::string data = PQgetvalue(r, i, 1);
+      const std::string data = PQgetvalue(r, i, nfields >= 3 ? 2 : 1);
       JVal root;
       JParser jp(data);
       if (!jp.parse(root)) {

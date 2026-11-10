@@ -384,7 +384,9 @@ int main(int argc, char** argv) {
   if (!cdc_only) src->end_snapshot();
 
   if (rc.ok() && o.cdc) {
-    mig::Status cr = (o.source_kind == "pg")
+    // openGauss 与 PostgreSQL 共用逻辑复制路径（同一个 PgSource 实现）
+    const bool pg_like = (o.source_kind == "pg" || o.source_kind == "og");
+    mig::Status cr = pg_like
                          ? mig::run_pg_cdc(o, m, o.cdc_max_events)
                          : mig::run_cdc(o, m, o.cdc_max_events);
     if (!cr.ok()) {
