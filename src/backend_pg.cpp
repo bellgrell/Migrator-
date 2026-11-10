@@ -7,6 +7,9 @@
 #include <cctype>
 #include <ctime>
 #include <cstring>
+#include <cerrno>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -320,7 +323,8 @@ class PgTarget : public ITarget, public DbBase {
         if (bbuf.empty()) return Status::OK();
         if (PQputCopyData(conn_, bbuf.data(), (int)bbuf.size()) != 1)
           return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
-        if (PQflush(conn_) < 0)
+        Status fst = flush_copy_output();
+        if (!fst.ok())
           return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
         bbuf.clear();
         return Status::OK();
@@ -368,7 +372,8 @@ class PgTarget : public ITarget, public DbBase {
         if (PQputCopyData(conn_, buf.data(), (int)buf.size()) != 1) {
           return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
         }
-        if (PQflush(conn_) < 0) {
+        Status fst = flush_copy_output();
+        if (!fst.ok()) {
           return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
         }
         buf.clear();
@@ -378,7 +383,8 @@ class PgTarget : public ITarget, public DbBase {
       if (PQputCopyData(conn_, buf.data(), (int)buf.size()) != 1) {
         return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
       }
-      if (PQflush(conn_) < 0) {
+      Status fst = flush_copy_output();
+      if (!fst.ok()) {
         return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
       }
     }
@@ -502,6 +508,27 @@ class PgTarget : public ITarget, public DbBase {
     return Status::OK();
   }
 
+  Status flush_copy_output() {
+    int rc = PQflush(conn_);
+    while (rc == 1) {
+      const int sock = PQsocket(conn_);
+      if (sock < 0) return Status::Err(Code::kDb, "PQflush: invalid socket");
+      fd_set wfds;
+      FD_ZERO(&wfds);
+      FD_SET(sock, &wfds);
+      struct timeval tv;
+      tv.tv_sec = 1;
+      tv.tv_usec = 0;
+      const int sr = select(sock + 1, nullptr, &wfds, nullptr, &tv);
+      if (sr < 0)
+        return Status::Err(Code::kDb, std::string("select: ") + std::strerror(errno));
+      rc = PQflush(conn_);
+    }
+    if (rc < 0)
+      return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
+    return Status::OK();
+  }
+
   Status begin_copy(const std::string& table) {
     Status st = end_copy();
     if (!st.ok()) return st;
@@ -558,7 +585,8 @@ class PgTarget : public ITarget, public DbBase {
     append_be32(hdr, 0);
     if (PQputCopyData(conn_, hdr.data(), (int)hdr.size()) != 1)
       return Status::Err(Code::kDb, std::string("PQputCopyData hdr: ") + PQerrorMessage(conn_));
-    if (PQflush(conn_) < 0)
+    Status fst = flush_copy_output();
+    if (!fst.ok())
       return Status::Err(Code::kDb, std::string("PQflush hdr: ") + PQerrorMessage(conn_));
     return Status::OK();
   }
@@ -574,7 +602,8 @@ class PgTarget : public ITarget, public DbBase {
       append_be16(tr, (uint16_t)0xFFFF);
       if (PQputCopyData(conn_, tr.data(), (int)tr.size()) != 1)
         return Status::Err(Code::kDb, std::string("PQputCopyData tr: ") + PQerrorMessage(conn_));
-      if (PQflush(conn_) < 0)
+      Status fst = flush_copy_output();
+      if (!fst.ok())
         return Status::Err(Code::kDb, std::string("PQflush tr: ") + PQerrorMessage(conn_));
     }
 

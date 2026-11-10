@@ -962,9 +962,20 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
       m.log("computing checksums (source vs target)...");
       for (auto& t : snapshot) {
         if (t->total == 0) continue;
+        int cbatch = 2000;
+        TableSchema schema;
+        if (src.read_schema(t->name, schema).ok()) {
+          for (const auto& c : schema.columns) {
+            if (c.binary || c.src_type.find("blob") != std::string::npos ||
+                c.src_type.find("binary") != std::string::npos) {
+              cbatch = 8;
+              break;
+            }
+          }
+        }
         Checksum a, b;
-        const Status sa = compute_checksum(src, t->name, 2000, a);
-        const Status sb = compute_checksum(*dst, t->name, 2000, b);
+        const Status sa = compute_checksum(src, t->name, cbatch, a);
+        const Status sb = compute_checksum(*dst, t->name, cbatch, b);
         if (!sa.ok() || !sb.ok()) {
           ++mismatch;
           m.log("[mismatch] checksum " + t->name + ": " +
