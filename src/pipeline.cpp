@@ -270,14 +270,14 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     if (pk_idx >= 0) pending_pk = rows.back()[(size_t)pk_idx].sql_literal();
     const int64_t n = (int64_t)rows.size();
     tmet->done += n;
-    m.rows_done.fetch_add(n, std::memory_order_relaxed);
-    m.batches.fetch_add(1, std::memory_order_relaxed);
+    m.add_rows(n);
+    m.add_batch();
     // 批内先本地累加，避免每个 Value 都打同一个原子 cache line
     int64_t bytes_local = 0;
     for (auto& r : rows) {
       for (auto& v : r) bytes_local += (int64_t)(v.s.size() + 12);
     }
-    m.bytes_written.fetch_add(bytes_local, std::memory_order_relaxed);
+    m.add_bytes(bytes_local);
     ++batch;
 
     if (o.commit_every > 0 && batch % o.commit_every == 0) {
@@ -461,13 +461,13 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
       auto account = [&](const std::vector<Row>& got) {
         const int64_t n = (int64_t)got.size();
         tmet->done += n;
-        m.rows_done.fetch_add(n, std::memory_order_relaxed);
-        m.batches.fetch_add(1, std::memory_order_relaxed);
+        m.add_rows(n);
+        m.add_batch();
         int64_t bytes_local = 0;
         for (auto& r : got) {
           for (auto& v : r) bytes_local += (int64_t)(v.s.size() + 12);
         }
-        m.bytes_written.fetch_add(bytes_local, std::memory_order_relaxed);
+        m.add_bytes(bytes_local);
         ++batch;
       };
 

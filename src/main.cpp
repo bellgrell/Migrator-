@@ -8,37 +8,16 @@
 #include "cdc.h"
 #include "migrator.h"
 #include "config_validator.h"
+#include "module.h"
 
 namespace {
 
 void print_features() {
   std::printf("mini-migrator modules:\n");
   std::printf("  core        on\n");
-#ifdef MIG_ENABLE_PG_CDC
-  std::printf("  pg_cdc      on\n");
-#else
-  std::printf("  pg_cdc      off\n");
-#endif
-#ifdef MIG_ENABLE_REPAIR
-  std::printf("  repair      on\n");
-#else
-  std::printf("  repair      off\n");
-#endif
-#ifdef MIG_ENABLE_METRICS
-  std::printf("  metrics     on\n");
-#else
-  std::printf("  metrics     off\n");
-#endif
-#ifdef MIG_ENABLE_SNAPSHOT
-  std::printf("  snapshot    on\n");
-#else
-  std::printf("  snapshot    off\n");
-#endif
-#ifdef MIG_ENABLE_RESUME
-  std::printf("  resume      on\n");
-#else
-  std::printf("  resume      off\n");
-#endif
+  for (const auto* mod : mig::ModuleManager::instance().all())
+    std::printf("  %-11s %s\n", mod->name().c_str(),
+                mod->compiled() ? "on" : "off");
 }
 
 void usage() {

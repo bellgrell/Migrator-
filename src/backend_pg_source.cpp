@@ -1,5 +1,6 @@
 #include "backends.h"
 #include "db_base.h"
+#include "pg_dialect.h"
 
 #include <libpq-fe.h>
 
@@ -96,11 +97,10 @@ class PgSource : public ISource, public DbBase {
     if (vr && PQresultStatus(vr) == PGRES_TUPLES_OK && PQntuples(vr) > 0)
       server_version_ = PQgetvalue(vr, 0, 0);
     if (vr) PQclear(vr);
-    server_is_og_ = server_version_.find("openGauss") != std::string::npos ||
-                    server_version_.find("GaussDB") != std::string::npos;
+    server_is_og_ = PgDialect::is_open_gauss(server_version_);
     // 与目标端一致：numeric 输出带前导 0，避免 checksum 假阳性
-    if (server_is_og_)
-      exec("SET behavior_compat_options = 'display_leading_zero'");
+    const std::string compat = PgDialect::compat_sql(server_is_og_);
+    if (!compat.empty()) exec(compat);
     return exec("BEGIN");
   }
 
@@ -247,7 +247,7 @@ class PgSource : public ISource, public DbBase {
     exec("COMMIT");
     Status st = exec("BEGIN ISOLATION LEVEL REPEATABLE READ");
     if (!st.ok()) return st;
-    file = server_is_og_ ? "opengauss-snapshot" : "postgres-snapshot";
+    file = PgDialect::snapshot_file(server_is_og_);
     pos = 0;
     return Status::OK();
   }
@@ -388,7 +388,7 @@ class PgSource : public ISource, public DbBase {
   }
 
   std::string describe() override {
-    const std::string kind = server_is_og_ ? "openGauss" : "PostgreSQL";
+    const std::string kind = PgDialect::name(server_is_og_);
     const std::string& dsn =
         opts_.pg_source_uses_source ? opts_.source : opts_.target;
     return kind + " source (" + dsn_get(dsn, "host", "127.0.0.1") + ":" +

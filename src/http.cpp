@@ -1,4 +1,5 @@
 #include "migrator.h"
+#include "module.h"
 
 #include <fstream>
 #include <sstream>
@@ -157,36 +158,13 @@ void handle(socket_t fd, Metrics& m) {
     body = "{\"ok\":true}";
   } else if (path == "/api/features") {
     body = "{";
-    body += "\"pg_cdc\":";
-#ifdef MIG_ENABLE_PG_CDC
-    body += "true";
-#else
-    body += "false";
-#endif
-    body += ",\"repair\":";
-#ifdef MIG_ENABLE_REPAIR
-    body += "true";
-#else
-    body += "false";
-#endif
-    body += ",\"metrics\":";
-#ifdef MIG_ENABLE_METRICS
-    body += "true";
-#else
-    body += "false";
-#endif
-    body += ",\"snapshot\":";
-#ifdef MIG_ENABLE_SNAPSHOT
-    body += "true";
-#else
-    body += "false";
-#endif
-    body += ",\"resume\":";
-#ifdef MIG_ENABLE_RESUME
-    body += "true";
-#else
-    body += "false";
-#endif
+    bool first = true;
+    for (const auto* mod : ModuleManager::instance().all()) {
+      if (!first) body += ",";
+      first = false;
+      body += "\"" + mod->name() + "\":" +
+              (mod->compiled() ? "true" : "false");
+    }
     body += "}";
   } else if (path == "/metrics") {
     if (!m.metrics_enabled.load()) {

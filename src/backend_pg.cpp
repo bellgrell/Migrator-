@@ -1,5 +1,6 @@
 #include "backends.h"
 #include "db_base.h"
+#include "pg_dialect.h"
 
 #include <libpq-fe.h>
 
@@ -117,14 +118,14 @@ class PgTarget : public ITarget, public DbBase {
     if (vr && PQresultStatus(vr) == PGRES_TUPLES_OK && PQntuples(vr) > 0)
       server_version_ = PQgetvalue(vr, 0, 0);
     if (vr) PQclear(vr);
-    server_is_og_ = server_version_.find("openGauss") != std::string::npos ||
-                    server_version_.find("GaussDB") != std::string::npos;
+    server_is_og_ = PgDialect::is_open_gauss(server_version_);
     // 请求 openGauss 但连到 PG 时，不做 openGauss 特化（describe 会标注）
     if (og_ && !server_is_og_) og_ = false;
 
     // openGauss 的 numeric 输出默认省略整数位的 0（.17），
     // 打开 display_leading_zero 才和 MySQL/PostgreSQL 的 0.17 一致
-    if (og_) exec_simple("SET behavior_compat_options = 'display_leading_zero'");
+    const std::string compat = PgDialect::compat_sql(og_);
+    if (!compat.empty()) exec_simple(compat);
 
     return exec_simple("BEGIN");
   }
@@ -212,7 +213,7 @@ class PgTarget : public ITarget, public DbBase {
     if (conn_) { PQfinish(conn_); conn_ = nullptr; }
   }
 
-  bool supports_upsert() const override { return !og_; }
+  bool supports_upsert() const override { return PgDialect::supports_upsert(og_); }
 
   // PostgreSQL/openGauss index names are schema-global.  Keep the
   // table-scoped name mapping here so pipeline.cpp has no target branch.
@@ -259,7 +260,7 @@ class PgTarget : public ITarget, public DbBase {
 
   std::string describe() override {
     std::string mode = use_copy_ ? "COPY" : "INSERT";
-    std::string kind = server_is_og_ ? "openGauss" : "PostgreSQL";
+    std::string kind = PgDialect::name(server_is_og_);
     if (og_requested_ && !server_is_og_ && !server_version_.empty())
       kind += " [requested openGauss]";
     std::string ver;

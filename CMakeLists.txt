@@ -17,7 +17,10 @@ add_library(migrator_core STATIC
   src/config_validator.cpp
   src/ddl_dialect.cpp
   src/job_scheduler.cpp
+  src/logger.cpp
   src/metrics.cpp
+  src/module.cpp
+  src/pg_dialect.cpp
   src/pipeline.cpp
   src/backend_sim.cpp
   src/backends.cpp

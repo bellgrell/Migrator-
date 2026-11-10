@@ -176,6 +176,10 @@ struct Metrics {
   std::deque<std::pair<double, int64_t>> series;
 
   void log(const std::string& s);
+  void add_rows(int64_t n) { rows_done.fetch_add(n, std::memory_order_relaxed); }
+  void add_batch() { batches.fetch_add(1, std::memory_order_relaxed); }
+  void add_bytes(int64_t n) { bytes_written.fetch_add(n, std::memory_order_relaxed); }
+  void inc_error() { errors.fetch_add(1, std::memory_order_relaxed); }
   void sample();
   std::string status_json();
   std::string tables_json();

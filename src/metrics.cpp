@@ -1,4 +1,5 @@
 #include "migrator.h"
+#include "logger.h"
 
 #include <cmath>
 #include <sstream>
@@ -6,6 +7,10 @@
 namespace mig {
 
 void Metrics::log(const std::string& s) {
+  LogLevel lvl = LogLevel::kInfo;
+  if (s.rfind("[error]", 0) == 0) lvl = LogLevel::kError;
+  else if (s.rfind("[warn]", 0) == 0) lvl = LogLevel::kWarn;
+  Logger::instance().write(lvl, s);
   std::lock_guard<std::mutex> lk(mu);
   char ts[32];
   double t = now_sec() - started_at;
