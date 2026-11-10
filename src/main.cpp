@@ -274,6 +274,21 @@ int main(int argc, char** argv) {
   if (o.source_kind == "pg" || o.source_kind == "og")
     o.pg_source_uses_source = true;
 
+  // L-01：PG/OG 源的 CDC 不支持以 MySQL 为目标。
+  // 放在全量之前校验，避免跑完几千万行才报错。
+  if (o.cdc && (o.source_kind == "pg" || o.source_kind == "og") &&
+      o.target_kind == "mysql") {
+    std::fprintf(stderr,
+                 "[fatal] PG/OG CDC target MySQL is not supported\n");
+    return 2;
+  }
+
+  // L-05：全量 + 增量模式丢弃上次遗留的位点，避免重放旧事件。
+  if (o.cdc && !cdc_only && o.cdc_start.empty()) {
+    std::remove(o.cdc_position_path.c_str());
+    std::remove(o.pg_cdc_position_path.c_str());
+  }
+
   if (!type_map_explicit && (o.source_kind == "pg" || o.source_kind == "og")) {
     o.type_map_path = (o.target_kind == "mysql")
                           ? "config/type_map.pg2mysql.json"
@@ -337,11 +352,14 @@ int main(int argc, char** argv) {
     return vr.ok() ? 0 : 1;
   }
 
-  std::thread http_thread([&]() {
-    int rc = mig::run_http_server(o.http_port, m);
-    if (rc != 0) std::fprintf(stderr, "[warn] http server failed, code=%d\n", rc);
-  });
-  http_thread.detach();
+  // L-02：--exit 模式下不启动面板线程，避免占用端口与阻塞退出。
+  if (!exit_after) {
+    std::thread http_thread([&]() {
+      int rc = mig::run_http_server(o.http_port, m);
+      if (rc != 0) std::fprintf(stderr, "[warn] http server failed, code=%d\n", rc);
+    });
+    http_thread.detach();
+  }
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
