@@ -470,6 +470,17 @@ Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
     if (max_events > 0 && applied >= max_events) break;
   }
 
+  // 一次性迁移：正常结束后回收槽，避免长期占用 WAL。
+  if (o.cdc_drop_slot) {
+    const std::string drop =
+        "SELECT pg_drop_replication_slot(" + cq(slot) + ")";
+    if (query_ok(conn, drop)) {
+      m.log("pg cdc slot dropped: " + slot);
+    } else {
+      m.log("[warn] drop cdc slot failed: " + slot);
+    }
+  }
+
   PQfinish(conn);
   return Status::OK();
 }

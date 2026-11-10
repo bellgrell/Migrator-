@@ -181,6 +181,7 @@ int main(int argc, char** argv) {
     else if (a == "--cdc-only") { o.cdc = true; cdc_only = true; }
     else if (a == "--cdc-ddl") o.cdc_ddl = true;
     else if (a == "--cdc-start") o.cdc_start = next();
+    else if (a == "--cdc-drop-slot") o.cdc_drop_slot = true;
     else if (a == "--cdc-server-id") o.cdc_server_id = std::stoi(next());
     else if (a == "--cdc-max-events") o.cdc_max_events = std::stoi(next());
     else if (a == "--no-verify") o.do_verify = false;

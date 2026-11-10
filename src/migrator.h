@@ -134,6 +134,7 @@ struct Options {
   bool cdc = false;
   bool opengauss = false;  // 目标方言：openGauss（PG 协议 + 差异处理）
   std::string cdc_start;
+  bool cdc_drop_slot = false;  // CDC 正常结束后删除逻辑复制槽（一次性迁移用）
   std::string cdc_position_path = "out/cdc-position.txt";
   int cdc_server_id = 987654321;
   int cdc_max_events = 0;
