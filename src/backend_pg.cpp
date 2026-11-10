@@ -4,6 +4,7 @@
 
 #include <libpq-fe.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <map>
@@ -78,6 +79,37 @@ std::string copy_value(const Value& v) {
     case ValType::kString:
     default:
       return copy_escape(v.s);
+  }
+}
+
+
+void copy_escape_append(std::string& out, const std::string& s) {
+  out.reserve(out.size() + s.size() + 8);
+  for (char ch : s) {
+    switch (ch) {
+      case '\\': out += "\\\\"; break;
+      case '\t': out += "\\t"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      default: out += ch;
+    }
+  }
+}
+
+void copy_value_append(std::string& out, const Value& v) {
+  switch (v.type) {
+    case ValType::kNull: out += "\\N"; break;
+    case ValType::kInt: out += std::to_string(v.i); break;
+    case ValType::kDouble: {
+      char buf[64];
+      const int n = std::snprintf(buf, sizeof buf, "%.17g", v.d);
+      if (n > 0) out.append(buf, (size_t)n);
+      break;
+    }
+    case ValType::kBool: out += v.b ? "true" : "false"; break;
+    case ValType::kBytes: out += copy_value(v); break;
+    case ValType::kString:
+    default: copy_escape_append(out, v.s); break;
   }
 }
 
@@ -166,11 +198,12 @@ class PgTarget : public ITarget, public DbBase {
     }
 
     std::string buf;
-    buf.reserve(rows.size() * 128);
+    const size_t per_row = rows[0].size() * 8 + 8;
+    buf.reserve(rows.size() * per_row);
     for (const auto& r : rows) {
       for (size_t j = 0; j < r.size(); ++j) {
         if (j) buf += '\t';
-        buf += copy_value(r[j]);
+        copy_value_append(buf, r[j]);
       }
       buf += '\n';
     }

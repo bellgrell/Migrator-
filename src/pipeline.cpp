@@ -231,7 +231,15 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     return false;
   }
 
-  const int batch_size = o.batch_size > 0 ? o.batch_size : 1000;
+  int batch_size = o.batch_size > 0 ? o.batch_size : 1000;
+  bool has_binary = false;
+  for (const auto& c : job.schema.columns) {
+    if (c.binary) { has_binary = true; break; }
+  }
+  if (has_binary && batch_size > 8) {
+    batch_size = 8;
+    m.log("[info] binary table " + job.name + ": batch capped to 8");
+  }
   const int64_t total_batches =
       job.rows > 0 ? (job.rows + batch_size - 1) / batch_size : 0;
   const double t_start = now_sec();
@@ -400,7 +408,15 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
     if (b[(size_t)i] < b[(size_t)i - 1]) b[(size_t)i] = b[(size_t)i - 1];
   }
 
-  const int batch_size = o.batch_size > 0 ? o.batch_size : 1000;
+  int batch_size = o.batch_size > 0 ? o.batch_size : 1000;
+  bool has_binary = false;
+  for (const auto& c : job.schema.columns) {
+    if (c.binary) { has_binary = true; break; }
+  }
+  if (has_binary && batch_size > 8) {
+    batch_size = 8;
+    m.log("[info] binary range " + job.name + ": batch capped to 8");
+  }
   const double t_start = now_sec();
   std::atomic<int> failures{0};
 
