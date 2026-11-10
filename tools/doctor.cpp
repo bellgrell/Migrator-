@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "dsn_secret.h"
+
 #ifdef HAVE_PG
 #include <libpq-fe.h>
 #endif
@@ -158,7 +160,7 @@ void check_pg(const Dsn& d, const std::string& kind) {
   const std::string port = d.get("port", "5432");
   const std::string user = d.get("user", "postgres");
   const std::string db = d.get("db", "postgres");
-  const std::string pw = d.get("password");
+  const std::string pw = mig::resolve_secret(d.get("password"));
 
   std::string ci = "host=" + host + " port=" + port + " user=" + user +
                    " dbname=" + db + " connect_timeout=5";
@@ -170,7 +172,7 @@ void check_pg(const Dsn& d, const std::string& kind) {
     if (e.find("locked") != std::string::npos)
       fail("认证/账号", e, "gsql -c \"ALTER USER " + user + " ACCOUNT UNLOCK;\"");
     else
-      fail("认证", e, "检查用户名/密码、pg_hba.conf、.pgpass");
+      fail("认证", e, "检查用户名/密码、pg_hba.conf、DSN 中的 password=");
     if (c) PQfinish(c);
     return;
   }
@@ -229,7 +231,7 @@ void check_mysql(const Dsn& d) {
   const std::string port = d.get("port", "3306");
   const std::string user = d.get("user", "root");
   const std::string db = d.get("db");
-  const std::string pw = d.get("password");
+  const std::string pw = mig::resolve_secret(d.get("password"));
 
   MYSQL* m = mysql_init(nullptr);
   unsigned int to = 5;
@@ -317,8 +319,13 @@ int main(int argc, char** argv) {
   }
 
   std::printf("mm-doctor  源=%s  目标=%s\n", st.c_str(), tt.c_str());
-  if (src.has("password")) warn("源 DSN", "含明文密码", "改用 ~/.pgpass，DSN 不写 password=");
-  if (tgt.has("password")) warn("目标 DSN", "含明文密码", "改用 ~/.pgpass，DSN 不写 password=");
+  auto plain_secret = [](const Dsn& d) {
+    if (!d.has("password")) return false;
+    const std::string v = d.get("password");
+    return v.rfind("env:", 0) != 0 && v.rfind("file:", 0) != 0;
+  };
+  if (plain_secret(src)) warn("源 DSN", "含明文密码", "改用 password=env:NAME 或 file:PATH");
+  if (plain_secret(tgt)) warn("目标 DSN", "含明文密码", "改用 password=env:NAME 或 file:PATH");
   std::printf("----------------------------------------\n");
 
   auto probe = [](const Dsn& d, const std::string& kind, const char* label) {

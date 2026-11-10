@@ -25,7 +25,7 @@ make doctor        # 生成 build/mm-doctor
 | 类别 | 检查内容 | 失败/警告时的建议 |
 |---|---|---|
 | 连通性 | TCP 可达性与往返延迟 | 检查网络/防火墙/端口映射 |
-| 认证 | 用户名、密码、库名 | 检查 pg_hba、.pgpass、账号是否被锁 |
+| 认证 | 用户名、密码、库名 | 检查 pg_hba、密码、账号是否被锁 |
 | DSN | 是否显式带 `db=`，实际连到哪个库 | 补上 db= 避免写入错库 |
 | 版本 | 服务端版本 | 与构建时的客户端库匹配 |
 | wal_level | 是否为 logical | `ALTER SYSTEM SET wal_level='logical'` 后重启 |
@@ -65,5 +65,5 @@ mm-doctor  源=mysql  目标=og
 ## 设计说明
 
 - 插件检查会**真实建一次槽再删**，能同时验证 wal_level、插件可用性与权限，比查系统表更可靠。
-- 不打印密码；DSN 中的密码只用于建立连接。
+- 不打印密码；支持 password=env:NAME / file:PATH，避免明文。
 - 与主程序共用 Makefile 的编译参数，不引入新的依赖。
