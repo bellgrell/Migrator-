@@ -92,6 +92,7 @@ struct Options {
   std::string io_scheduler = "fair";  // off | fair | scan（批 I/O 调度策略）
   int io_queue_depth = 0;              // 并发读批次数，0 = workers
   int io_prefetch = 0;                 // 每区间预取批数（0=关闭；远程库通常无收益）
+  std::string load_mode = "auto";      // auto | insert | ignore | replace
   int io_window = 0;                   // SCAN 窗口，0 = 自动
   int workers = 1;
   int pk_min_rows = 1000000;  // 单表主键区间并行阈值（小表顺序更快）
@@ -198,6 +199,30 @@ class ISource {
     (void)table; (void)column; (void)lo; (void)hi;
     return Status::Err(Code::kUnsupported, "pk range not supported");
   }
+  // 单列整数主键 -> 区间并行的列名；能力由源端决定
+  virtual Status pk_range_column(const TableSchema& s, std::string& column) {
+    if (s.primary_key.size() != 1) {
+      return Status::Err(Code::kUnsupported, "no single primary key");
+    }
+    for (const auto& c : s.columns) {
+      if (c.name != s.primary_key[0]) continue;
+      const std::string& t = c.src_type;
+      const bool int_type =
+          t.rfind("tinyint", 0) == 0 || t.rfind("smallint", 0) == 0 ||
+          t.rfind("mediumint", 0) == 0 || t.rfind("int", 0) == 0 ||
+          t.rfind("bigint", 0) == 0;
+      if (int_type) {
+        column = c.name;
+        return Status::OK();
+      }
+    }
+    return Status::Err(Code::kUnsupported, "primary key is not integer");
+  }
+  virtual Status open_cursor_ordered(const std::string& table,
+                                     const std::string& column) {
+    (void)table; (void)column;
+    return Status::Err(Code::kUnsupported, "ordered cursor not supported");
+  }
   virtual Status open_cursor_from(const std::string& table,
                                   const std::string& pk_col,
                                   const std::string& after_literal) {
@@ -240,6 +265,8 @@ class ITarget {
   virtual void close() = 0;
   virtual int64_t written(const std::string& table) = 0;
   virtual void reset_counters() {}
+  // 目标方言的建表 DDL（默认 PostgreSQL/openGauss 方言）
+  virtual std::string build_ddl(const TableSchema& s);
   // 是否支持 INSERT ... ON CONFLICT（openGauss 不支持）
   virtual bool supports_upsert() const { return true; }
   // 目标方言的索引 / ANALYZE 语句
@@ -287,7 +314,9 @@ Status load_modules_config(const std::string& path, Options& o);
 
 std::string build_ddl(const TableSchema& s);
 std::string build_ddl_mysql(const TableSchema& s);
-std::string convert_view_sql(const std::string& mysql_sql);
+std::string convert_view_sql(const std::string& sql,
+                             const std::string& source_kind,
+                             const std::string& target_kind);
 std::string build_index_ddl(const std::string& table, const IndexDef& idx);
 std::string json_escape(const std::string& s);
 double now_sec();

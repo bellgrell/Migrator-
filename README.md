@@ -112,7 +112,7 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--port` | 8123 | Web dashboard port |
 | `--no-verify` | off | Skip row-count and checksum verification |
 | `--no-checksum` | off | Compare row counts only |
-| `--with-views` | off | Migrate views (MySQL to PG/openGauss) |
+| `--with-views` | off | Migrate views (MySQL ↔ PG/openGauss; PG→MySQL mechanical conversion) |
 | `--cdc` | off | Continue with CDC after full load |
 | `--cdc-only` | off | Run CDC only |
 | `--cdc-ddl` | off | Apply DDL changes from binlog |
@@ -130,6 +130,7 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--consistent-snapshot` | off | Consistent snapshot (MySQL: binlog position; PG/openGauss: REPEATABLE READ), forces workers=1 |
 | `--resume` | off | Resume full load from PK watermark |
 | `--resume-dir` | out/resume | Resume checkpoint directory |
+| `--load-mode` | auto | MySQL target LOAD DATA mode: auto/insert/ignore/replace |
 | `--io-scheduler` | `fair` | Batch I/O scheduling: `off` / `fair` / `scan` |
 | `--io-queue-depth` | 0 | Concurrent batch reads (0 = workers) |
 | `--io-prefetch` | 0 | Read-ahead batches per range (0 = off) |
@@ -175,14 +176,14 @@ Typical table-level results with the same dataset:
 - CDC requires a primary key; tables without a primary key are skipped.
 - CDC supports MySQL sources (binlog ROW events) and PostgreSQL sources (wal2json logical decoding); the PostgreSQL CDC target must be PG/openGauss, not MySQL.
 - PostgreSQL CDC requires `wal_level=logical`, the `wal2json` output plugin allowed in `output_plugin_libraries`, and a replication slot. Changes made during a full load are not captured unless the slot existed before the load.
-- `--repair` requires a single-column primary key and holds primary-key sets in memory; it inserts missing rows and deletes extra rows, then re-verifies.
+- `--repair` requires a single-column primary key; integer keys use a streaming merge (O(batch) memory), non-integer keys fall back to in-memory sets.
 - Unsupported column types: BIT, ENUM, SET, GEOMETRY.
 - DDL dialect conversion is limited; complex MySQL-specific DDL may need manual rewriting.
 - DM8 is not implemented.
-- PostgreSQL → MySQL view migration is not implemented yet.
+- PostgreSQL → MySQL view migration uses mechanical conversion (quotes/functions/simple `::type` casts); complex expressions still need review.
 - Target tables should be empty or already aligned; use `--truncate` to drop and recreate them for a safe rerun.
 - Checksum read failures make verification FAIL instead of being silently skipped.
-- Full-load connections retry with backoff; CDC reconnects from the last committed binlog position.
+- Full-load connections retry with backoff; a mid-stream read failure reconnects and resumes from the last written primary key; CDC reconnects from the last committed binlog position.
 - For remote databases, open the DB port, allow the client host in grants/firewall, and use SSH tunnel/VPN if needed.
 - `--resume` is implemented for MySQL, PostgreSQL and openGauss sources; it requires a single-column primary key.
 - `--consistent-snapshot` uses a single source connection (MySQL: consistent snapshot + binlog position; PG/openGauss: REPEATABLE READ) and forces `workers=1`.

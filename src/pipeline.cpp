@@ -159,6 +159,30 @@ void write_checkpoint(const Options& o, const std::string& table,
   if (out) out << v;
 }
 
+Status reconnect_source(ISource& src, const Options& o, Metrics& m,
+                        const std::string& table, const std::string& pk,
+                        const std::string& after) {
+  src.close_cursor();
+  Status st;
+  const int tries = o.connect_retries > 0 ? o.connect_retries : 0;
+  for (int i = 0; i <= tries; ++i) {
+    if (i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(
+          (o.connect_backoff_ms > 0 ? o.connect_backoff_ms : 500) * i));
+    }
+    st = src.connect();
+    if (!st.ok()) continue;
+    st = after.empty() ? src.open_cursor(table)
+                       : src.open_cursor_from(table, pk, after);
+    if (st.ok()) {
+      m.log("[warn] source reconnected: " + table +
+            (after.empty() ? "" : " after " + after));
+      return st;
+    }
+  }
+  return st;
+}
+
 bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tgt,
                 Metrics& m) {
   auto tmet = find_metric(m, job.name);
@@ -229,6 +253,11 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     rows.clear();
     st = src.fetch_batch(batch_size, rows);
     if (!st.ok()) {
+      if (pk_idx >= 0 && !pending_pk.empty()) {
+        m.log("[warn] fetch failed, reconnecting source: " + st.str());
+        st = reconnect_source(src, o, m, job.name, pk->name, pending_pk);
+        if (st.ok()) continue;
+      }
       m.log("[error] fetch " + job.name + ": " + st.str());
       tmet->errors += 1;
       m.errors += 1;
@@ -327,11 +356,12 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   auto tmet = find_metric(m, job.name);
   if (!tmet) return false;
 
-  const ColumnDef* pk = single_int_pk(job.schema);
-  if (!pk) return copy_table(o, job, src, tgt, m);
+  std::string pk_name;
+  if (!src.pk_range_column(job.schema, pk_name).ok())
+    return copy_table(o, job, src, tgt, m);
 
   int64_t lo = 0, hi = 0;
-  Status bs = src.pk_bounds(job.name, pk->name, lo, hi);
+  Status bs = src.pk_bounds(job.name, pk_name, lo, hi);
   if (!bs.ok()) {
     m.log("[warn] pk range " + job.name + ": " + bs.str() + " -> sequential");
     return copy_table(o, job, src, tgt, m);
@@ -342,7 +372,7 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   tmet->started_at = now_sec();
   m.log("=== table " + job.name + " (" + fmt_int(job.rows) +
         " rows) pk-range parallel: " + std::to_string(parts) + " parts [" +
-        std::to_string(lo) + ", " + std::to_string(hi) + "] on " + pk->name);
+        std::to_string(lo) + ", " + std::to_string(hi) + "] on " + pk_name);
   m.log("DDL for " + job.name + ":\n" + job.ddl);
 
   if (o.truncate_target) {
@@ -412,7 +442,7 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
         tmet->errors += 1;
         return;
       }
-      Status os = s->open_cursor_range(job.name, pk->name, a, z);
+      Status os = s->open_cursor_range(job.name, pk_name, a, z);
       if (!os.ok()) {
         m.log("[error] range " + std::to_string(i) + ": " + os.str());
         failures += 1;
@@ -602,7 +632,7 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   return !failed;
 }
 
-bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
+bool prepare_jobs(ISource& src, ITarget& tgt, const TypeMap& tm, const Options& o,
                   const std::unordered_map<std::string, TablePolicy>& policies,
                   Metrics& m, std::vector<TableJob>& jobs,
                   std::vector<TableJob>& rebuilds) {
@@ -676,8 +706,7 @@ bool prepare_jobs(ISource& src, const TypeMap& tm, const Options& o,
           c.dst_type = "decimal(65,30)";
       }
     }
-    job.ddl = (o.target_kind == "mysql") ? build_ddl_mysql(job.schema)
-                                          : build_ddl(job.schema);
+    job.ddl = tgt.build_ddl(job.schema);
     job.rows = src.total_rows(t);
     if (job.rows < 0) job.rows = 0;
     total += job.rows;
@@ -837,7 +866,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
 
   std::vector<TableJob> jobs;
   std::vector<TableJob> rebuilds;
-  if (!prepare_jobs(src, tm, o, policies, m, jobs, rebuilds)) {
+  if (!prepare_jobs(src, tgt, tm, o, policies, m, jobs, rebuilds)) {
     m.running = false;
     m.finished = true;
     m.finished_at = now_sec();
@@ -854,7 +883,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     for (const auto& j : jobs) {
       const bool big = o.pk_parallel && o.workers > 1 &&
                        j.rows >= (int64_t)o.pk_min_rows &&
-                       single_int_pk(j.schema) != nullptr &&
+                       [&] { std::string c; return src.pk_range_column(j.schema, c).ok(); }() &&
                        (jobs.size() == 1 || j.rows * 2 >= total_rows);
       (big ? ranged : plain).push_back(j);
     }
@@ -915,9 +944,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
           std::to_string(jobs.size()) + " tables");
   }
 
-  if (o.with_views && o.target_kind == "mysql") {
-    m.log("[warn] views: MySQL target not supported yet, skipped");
-  } else if (o.with_views) {
+  if (o.with_views) {
     std::vector<std::string> views;
     Status vs0 = src.list_views(views);
     if (!vs0.ok()) {
@@ -933,7 +960,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
           m.log("[error] view " + v + ": " + rs.str());
           continue;
         }
-        Status cs = tgt.exec_sql(convert_view_sql(sql));
+        Status cs = tgt.exec_sql(convert_view_sql(sql, o.source_kind, o.target_kind));
         if (cs.ok()) {
           m.log("view ok: " + v);
         } else {
@@ -1106,6 +1133,91 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     for (size_t i = 0; i < s.columns.size(); ++i)
       if (s.columns[i].name == pk->name) { pk_idx = (int)i; break; }
     if (pk_idx < 0) continue;
+
+    // 整数主键：双游标按主键排序流式归并，内存 O(batch)；
+    // 其他主键类型退回下面的集合比较（保持兼容）。
+    if (single_int_pk(s) != nullptr) {
+      Status oa = src.open_cursor_ordered(t->name, pk->name);
+      Status ob = dst->open_cursor_ordered(t->name, pk->name);
+      if (oa.ok() && ob.ok()) {
+        std::vector<Row> ra, rb, wbuf;
+        size_t ia = 0, ib = 0;
+        auto refill = [](ISource& s2, std::vector<Row>& v, size_t& i) -> bool {
+          if (i < v.size()) return true;
+          v.clear();
+          i = 0;
+          return s2.fetch_batch(2000, v).ok() && !v.empty();
+        };
+        auto cmp_pk = [](const Value& x, const Value& y) -> int {
+          if (x.type == ValType::kInt && y.type == ValType::kInt)
+            return x.i < y.i ? -1 : (x.i > y.i ? 1 : 0);
+          const std::string a2 = x.sql_literal();
+          const std::string b2 = y.sql_literal();
+          return a2.compare(b2);
+        };
+        bool ha = refill(src, ra, ia);
+        bool hb = refill(*dst, rb, ib);
+        int64_t missing = 0, extra = 0;
+        std::vector<std::string> dbuf;
+        auto flush_w = [&]() {
+          if (!wbuf.empty()) {
+            tgt.write_batch(t->name, wbuf);
+            wbuf.clear();
+          }
+        };
+        auto flush_d = [&]() {
+          for (auto& lit : dbuf)
+            tgt.exec_sql(tgt.delete_sql(t->name, pk->name, lit));
+          if (!dbuf.empty()) tgt.commit();
+          dbuf.clear();
+        };
+        while (ha || hb) {
+          if (!ha && !hb) break;
+          if (!ha) {
+            dbuf.push_back(rb[ib][(size_t)pk_idx].sql_literal());
+            ++ib;
+            ++extra;
+            hb = refill(*dst, rb, ib);
+          } else if (!hb) {
+            wbuf.push_back(ra[ia]);
+            ++ia;
+            ++missing;
+            ha = refill(src, ra, ia);
+          } else {
+            const int c = cmp_pk(ra[ia][(size_t)pk_idx], rb[ib][(size_t)pk_idx]);
+            if (c < 0) {
+              wbuf.push_back(ra[ia]);
+              ++ia;
+              ++missing;
+              ha = refill(src, ra, ia);
+            } else if (c > 0) {
+              dbuf.push_back(rb[ib][(size_t)pk_idx].sql_literal());
+              ++ib;
+              ++extra;
+              hb = refill(*dst, rb, ib);
+            } else {
+              ++ia;
+              ++ib;
+              ha = refill(src, ra, ia);
+              hb = refill(*dst, rb, ib);
+            }
+          }
+          if (wbuf.size() >= 500) flush_w();
+          if (dbuf.size() >= 500) flush_d();
+        }
+        flush_w();
+        flush_d();
+        tgt.commit();
+        src.close_cursor();
+        dst->close_cursor();
+        m.log("repair " + t->name + ": +" + std::to_string(missing) + " / -" +
+              std::to_string(extra) + " (stream)");
+        repaired += 1;
+        continue;
+      }
+      src.close_cursor();
+      dst->close_cursor();
+    }
 
     std::unordered_set<std::string> a;
     std::unordered_set<std::string> b;

@@ -345,6 +345,10 @@ std::string build_ddl_mysql(const TableSchema& s) {
   return out;
 }
 
+std::string ITarget::build_ddl(const TableSchema& s) {
+  return ::mig::build_ddl(s);
+}
+
 std::string build_ddl(const TableSchema& s) {
   std::vector<std::string> parts;
   parts.reserve(s.columns.size() + 1);

@@ -202,6 +202,10 @@ class MySqlTarget : public ITarget {
     return n;
   }
 
+  std::string build_ddl(const TableSchema& s) override {
+    return build_ddl_mysql(s);
+  }
+
   std::string index_ddl(const std::string& table, const IndexDef& idx) override {
     std::string cols;
     for (size_t i = 0; i < idx.columns.size(); ++i) {
@@ -306,9 +310,13 @@ class MySqlTarget : public ITarget {
       if (i) cols += ",";
       cols += "`" + st.cols[i] + "`";
     }
-    std::string sql = "LOAD DATA LOCAL INFILE '" + st.path + "' " +
-                      (resume_ ? "IGNORE " : "") + "INTO TABLE `" +
-                      table + "` CHARACTER SET utf8mb4 "
+    std::string verb;
+    if (opts_.load_mode == "replace") verb = "REPLACE ";
+    else if (opts_.load_mode == "ignore") verb = "IGNORE ";
+    else if (opts_.load_mode == "insert") verb = "";
+    else verb = resume_ ? "IGNORE " : "";
+    std::string sql = "LOAD DATA LOCAL INFILE '" + st.path + "' " + verb +
+                      "INTO TABLE `" + table + "` CHARACTER SET utf8mb4 "
                       "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
                       "LINES TERMINATED BY '\\n' (" + cols + ")";
     if (mysql_query(conn_, sql.c_str())) return err("load data " + table);

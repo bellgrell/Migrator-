@@ -162,6 +162,19 @@ class MySqlSource : public ISource {
     return Status::OK();
   }
 
+  Status open_cursor_ordered(const std::string& table,
+                             const std::string& column) override {
+    close_cursor();
+    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+                          " ORDER BY " + kBt + column + kBt;
+    if (mysql_query(conn_, q.c_str())) return err("SELECT ordered " + table);
+    res_ = mysql_use_result(conn_);
+    if (!res_) return err("use_result ordered");
+    fields_ = mysql_fetch_fields(res_);
+    nfields_ = mysql_num_fields(res_);
+    return Status::OK();
+  }
+
   Status open_cursor_from(const std::string& table, const std::string& column,
                           const std::string& after_literal) override {
     close_cursor();

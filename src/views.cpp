@@ -22,33 +22,66 @@ void replace_ci(std::string& s, const std::string& from, const std::string& to) 
   }
 }
 
+void backticks_to_quotes(std::string& s) {
+  for (char& c : s)
+    if (c == kBacktick) c = '"';
+}
+
+void quotes_to_backticks(std::string& s) {
+  for (char& c : s)
+    if (c == '"') c = kBacktick;
+}
+
 }  // namespace
 
-// MySQL 的 CREATE VIEW -> PostgreSQL 可执行的 CREATE OR REPLACE VIEW
-// 只做安全的机械转换，复杂函数仍需人工改写
-std::string convert_view_sql(const std::string& mysql_sql) {
-  std::string low = mysql_sql;
-  for (char& c : low) c = (char)std::tolower((unsigned char)c);
+// Mechanical view conversion. Complex expressions still need manual review.
+std::string convert_view_sql(const std::string& sql,
+                             const std::string& source_kind,
+                             const std::string& target_kind) {
+  if (source_kind == target_kind) return sql;
 
-  // 去掉 ALGORITHM=... DEFINER=... SQL SECURITY ...，从 VIEW 开始
-  std::string body = mysql_sql;
-  const size_t pos = low.find(" view ");
-  if (pos != std::string::npos) body = mysql_sql.substr(pos + 1);
+  const bool src_mysql = source_kind == "mysql";
+  const bool dst_mysql = target_kind == "mysql";
 
-  std::string out = "CREATE OR REPLACE " + body;
+  if (src_mysql && !dst_mysql) {
+    // MySQL CREATE VIEW -> PostgreSQL/openGauss CREATE OR REPLACE VIEW
+    std::string low = sql;
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
 
-  // 反引号 -> 双引号
-  for (char& c : out) {
-    if (c == kBacktick) c = '"';
+    std::string body = sql;
+    const size_t pos = low.find(" view ");
+    if (pos != std::string::npos) body = sql.substr(pos + 1);
+
+    std::string out = "CREATE OR REPLACE " + body;
+    backticks_to_quotes(out);
+
+    replace_ci(out, "IFNULL(", "COALESCE(");
+    replace_ci(out, "NOW()", "now()");
+    replace_ci(out, "CURDATE()", "current_date");
+    replace_ci(out, "LENGTH(", "length(");
+    return out;
   }
 
-  // 常见函数映射
-  replace_ci(out, "IFNULL(", "COALESCE(");
-  replace_ci(out, "NOW()", "now()");
-  replace_ci(out, "CURDATE()", "current_date");
-  replace_ci(out, "LENGTH(", "length(");
+  if (!src_mysql && dst_mysql) {
+    // PostgreSQL/openGauss view -> MySQL
+    std::string out = sql;
+    quotes_to_backticks(out);
 
-  return out;
+    replace_ci(out, "now()", "NOW()");
+    replace_ci(out, "current_date", "CURDATE()");
+    replace_ci(out, "COALESCE(", "IFNULL(");
+
+    // Drop simple PostgreSQL casts that MySQL does not understand.
+    for (const char* t : {"::integer", "::bigint", "::smallint", "::numeric",
+                          "::text", "::boolean", "::double precision",
+                          "::real"}) {
+      replace_ci(out, t, "");
+    }
+    return out;
+  }
+
+  // PG <-> openGauss: both use the same view dialect.
+  return sql;
 }
 
 }  // namespace mig

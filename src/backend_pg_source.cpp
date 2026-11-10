@@ -117,6 +117,40 @@ class PgSource : public ISource {
     return Status::OK();
   }
 
+  Status list_views(std::vector<std::string>& out) override {
+    out.clear();
+    PGresult* r = PQexec(conn_,
+        "SELECT viewname FROM pg_views WHERE schemaname='public' "
+        "AND viewname NOT LIKE 'pg_%' ORDER BY viewname");
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
+      if (r) PQclear(r);
+      return Status::Err(Code::kDb, "pg list_views failed");
+    }
+    for (int i = 0; i < PQntuples(r); ++i)
+      out.push_back(PQgetvalue(r, i, 0));
+    PQclear(r);
+    return Status::OK();
+  }
+
+  Status read_view_sql(const std::string& name, std::string& sql) override {
+    std::string quoted;
+    for (char c : name) {
+      if (c == '"') quoted += "\"\"";
+      else quoted += c;
+    }
+    const std::string q =
+        "SELECT pg_get_viewdef('\"" + quoted + "\"'::regclass, true)";
+    PGresult* r = PQexec(conn_, q.c_str());
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) == 0) {
+      if (r) PQclear(r);
+      return Status::Err(Code::kDb, "pg read_view_sql failed: " + name);
+    }
+    std::string def = PQgetvalue(r, 0, 0);
+    PQclear(r);
+    sql = "CREATE OR REPLACE VIEW \"" + quoted + "\" AS " + def;
+    return Status::OK();
+  }
+
   Status read_schema(const std::string& table, TableSchema& out) override {
     out = TableSchema();
     out.name = table;
@@ -218,6 +252,18 @@ class PgSource : public ISource {
   }
 
   void end_snapshot() override { exec("COMMIT"); }
+
+  Status open_cursor_ordered(const std::string& table,
+                             const std::string& column) override {
+    close_cursor();
+    const std::string sel = "SELECT * FROM \"" + table + "\" ORDER BY \"" +
+                            column + "\"";
+    Status st = exec("DECLARE mig_cur NO SCROLL CURSOR FOR " + sel);
+    if (!st.ok()) st = exec("DECLARE mig_cur CURSOR FOR " + sel);
+    if (!st.ok()) return st;
+    cursor_open_ = true;
+    return Status::OK();
+  }
 
   Status open_cursor_from(const std::string& table, const std::string& column,
                           const std::string& after_literal) override {

@@ -130,6 +130,7 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--consistent-snapshot` | 关 | 一致性快照（MySQL 用 binlog 位点；PG/openGauss 用 REPEATABLE READ），自动 workers=1 |
 | `--resume` | 关 | 按主键水位断点续传 |
 | `--resume-dir` | out/resume | 断点文件目录 |
+| `--load-mode` | auto | MySQL 目标 LOAD DATA 模式：auto/insert/ignore/replace |
 | `--io-scheduler` | `fair` | 批 I/O 调度：`off` / `fair` / `scan` |
 | `--io-queue-depth` | 0 | 并发读批次数（0 = workers） |
 | `--io-prefetch` | 0 | 每区间预取批数（0 = 关闭） |
@@ -175,14 +176,14 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 - CDC 需要主键；无主键表会被跳过。
 - CDC 支持 MySQL 源（binlog ROW 事件）和 PostgreSQL 源（wal2json 逻辑解码）；PG CDC 目标必须是 PG/openGauss，不支持 MySQL。
 - PostgreSQL CDC 需要 `wal_level=logical`、在 `output_plugin_libraries` 中允许 `wal2json`，并创建复制槽；全量迁移期间的变化只有槽提前存在才能捕获。
-- `--repair` 需要单列主键，会在内存中保存主键集合，补缺失行、删多余行，然后重新校验。
+- `--repair` 需要单列主键；整数主键走双游标流式归并（内存 O(batch)），非整数主键回退集合比较。
 - 不支持的列类型：BIT、ENUM、SET、GEOMETRY。
 - DDL 方言转换有限；复杂的 MySQL 专用 DDL 可能需要手工改写。
 - DM8 尚未实现。
-- PostgreSQL → MySQL 的视图迁移尚未实现。
+- PostgreSQL → MySQL 的视图迁移已支持机械转换（双引号/函数/简单 `::type` 转换）；复杂表达式仍建议手工复核。
 - 目标表应为空或已对齐；可用 `--truncate` 先 DROP 再重建，便于安全重跑。
 - checksum 读取失败会让校验直接 FAIL，不再静默跳过。
-- 全量连接失败会按退避重试；CDC 断线会从最后提交的 binlog 位点重连。
+- 全量连接失败会按退避重试；顺序全量读取中途断线会从最后成功写入的主键重连续读；CDC 断线会从最后提交的 binlog 位点重连。区间并行路径和目标端批量写失败目前仍会终止任务（避免重复写入）。
 - 远程数据库需要放行端口、在账号/防火墙中允许客户端 IP；必要时用 SSH 隧道或 VPN。
 - `--resume` 已支持 MySQL、PostgreSQL、openGauss 源，需要单列主键。
 - `--consistent-snapshot` 使用单条源连接（MySQL 用一致性快照 + binlog 位点；PG/openGauss 用 REPEATABLE READ），并强制 `workers=1`。
