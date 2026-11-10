@@ -1,4 +1,5 @@
 #include "backends.h"
+#include "db_base.h"
 
 #include <mysql/mysql.h>
 
@@ -37,15 +38,15 @@ std::string dsn_get(const std::string& dsn, const std::string& key,
   return def;
 }
 
-class MySqlSource : public ISource {
+class MySqlSource : public ISource, public DbBase {
  public:
-  explicit MySqlSource(const Options& o) : opts_(o) {}
+  explicit MySqlSource(const Options& o) : DbBase(o) {}
   ~MySqlSource() override { disconnect(); }
 
   Status connect() override {
     conn_ = mysql_init(nullptr);
     if (!conn_) return Status::Err(Code::kDb, "mysql_init failed");
-    unsigned int ct = (unsigned int)(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10);
+    unsigned int ct = (unsigned int)connect_timeout();
     mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
@@ -372,7 +373,6 @@ class MySqlSource : public ISource {
     if (conn_) { mysql_close(conn_); conn_ = nullptr; }
   }
 
-  Options opts_;
   MYSQL* conn_ = nullptr;
   MYSQL_RES* res_ = nullptr;
   MYSQL_FIELD* fields_ = nullptr;

@@ -1,4 +1,5 @@
 #include "backends.h"
+#include "db_base.h"
 
 #include <libpq-fe.h>
 
@@ -78,10 +79,10 @@ std::string copy_value(const Value& v) {
   }
 }
 
-class PgTarget : public ITarget {
+class PgTarget : public ITarget, public DbBase {
  public:
   explicit PgTarget(const Options& o)
-      : opts_(o), use_copy_(o.use_copy && !o.resume), resume_(o.resume),
+      : DbBase(o), use_copy_(o.use_copy && !o.resume), resume_(o.resume),
         og_requested_(o.opengauss), og_(o.opengauss) {}
   ~PgTarget() override { close(); }
 
@@ -96,7 +97,7 @@ class PgTarget : public ITarget {
     const std::string ci =
         "host=" + cq(host) + " port=" + cq(port) + " user=" + cq(user) +
         " password=" + cq(pw) + " dbname=" + cq(db) +
-        " connect_timeout=" + std::to_string(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10) +
+        " connect_timeout=" + std::to_string(connect_timeout()) +
         " keepalives=1 keepalives_idle=30 sslmode=" + cq(opts_.sslmode);
     conn_ = PQconnectdb(ci.c_str());
 
@@ -328,7 +329,6 @@ class PgTarget : public ITarget {
     return Status::OK();
   }
 
-  Options opts_;
   PGconn* conn_ = nullptr;
   bool use_copy_ = true;
   bool resume_ = false;

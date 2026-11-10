@@ -1,4 +1,5 @@
 #include "backends.h"
+#include "db_base.h"
 
 #include <mysql/mysql.h>
 
@@ -63,15 +64,15 @@ std::string load_escape(const std::string& s) {
   return o;
 }
 
-class MySqlTarget : public ITarget {
+class MySqlTarget : public ITarget, public DbBase {
  public:
-  explicit MySqlTarget(const Options& o) : opts_(o), resume_(o.resume) {}
+  explicit MySqlTarget(const Options& o) : DbBase(o), resume_(o.resume) {}
   ~MySqlTarget() override { close(); }
 
   Status connect() override {
     conn_ = mysql_init(nullptr);
     if (!conn_) return Status::Err(Code::kDb, "mysql_init failed");
-    unsigned int ct = (unsigned int)(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10);
+    unsigned int ct = (unsigned int)connect_timeout();
     mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
@@ -407,7 +408,6 @@ class MySqlTarget : public ITarget {
     }
   }
 
-  Options opts_;
   MYSQL* conn_ = nullptr;
   bool load_enabled_ = true;
   bool resume_ = false;

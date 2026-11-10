@@ -1,4 +1,5 @@
 #include "backends.h"
+#include "db_base.h"
 
 #include <libpq-fe.h>
 
@@ -63,9 +64,9 @@ bool hex_decode(const std::string& in, std::string& out) {
   return true;
 }
 
-class PgSource : public ISource {
+class PgSource : public ISource, public DbBase {
  public:
-  explicit PgSource(const Options& o) : opts_(o) {}
+  explicit PgSource(const Options& o) : DbBase(o) {}
   ~PgSource() override { close(); }
 
   Status connect() override {
@@ -81,7 +82,7 @@ class PgSource : public ISource {
     const std::string ci =
         "host=" + cq(host) + " port=" + cq(port) + " user=" + cq(user) +
         " password=" + cq(pw) + " dbname=" + cq(db) +
-        " connect_timeout=" + std::to_string(opts_.connect_timeout > 0 ? opts_.connect_timeout : 10) +
+        " connect_timeout=" + std::to_string(connect_timeout()) +
         " keepalives=1 keepalives_idle=30 sslmode=" + cq(opts_.sslmode);
     conn_ = PQconnectdb(ci.c_str());
     if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
@@ -414,7 +415,6 @@ class PgSource : public ISource {
     if (conn_) { PQfinish(conn_); conn_ = nullptr; }
   }
 
-  Options opts_;
   PGconn* conn_ = nullptr;
   bool cursor_open_ = false;
   bool server_is_og_ = false;
