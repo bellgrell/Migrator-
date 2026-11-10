@@ -249,11 +249,17 @@ class PgTarget : public ITarget, public DbBase {
     if (!conn_) return 0;
     const std::string q = "SELECT COUNT(*) FROM \"" + table + "\"";
     PGresult* r = PQexec(conn_, q.c_str());
-    if (!r) return 0;
-    int64_t n = 0;
-    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0) {
-      n = std::strtoll(PQgetvalue(r, 0, 0), nullptr, 10);
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
+      if (r) PQclear(r);
+      // Missing table / failed query aborts the transaction.  Recover so a
+      // later repair on another table is not blocked by an aborted tx.
+      exec_simple("ROLLBACK");
+      exec_simple("BEGIN");
+      return 0;
     }
+    int64_t n = 0;
+    if (PQntuples(r) > 0)
+      n = std::strtoll(PQgetvalue(r, 0, 0), nullptr, 10);
     PQclear(r);
     return n;
   }

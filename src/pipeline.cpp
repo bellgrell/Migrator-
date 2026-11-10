@@ -881,6 +881,26 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   if (snapshot.empty()) {
     std::vector<std::string> tables;
     if (src.list_tables(tables).ok()) {
+      if (!o.only_tables.empty()) {
+        std::vector<std::string> filtered;
+        for (const auto& t : tables) {
+          for (const auto& n : o.only_tables) {
+            if (n == t) { filtered.push_back(t); break; }
+          }
+        }
+        tables.swap(filtered);
+      }
+      if (!o.exclude_tables.empty()) {
+        std::vector<std::string> kept;
+        for (const auto& t : tables) {
+          bool skip = false;
+          for (const auto& n : o.exclude_tables) {
+            if (n == t) { skip = true; break; }
+          }
+          if (!skip) kept.push_back(t);
+        }
+        tables.swap(kept);
+      }
       for (const auto& t : tables) {
         auto tm = std::make_shared<TableMetric>();
         tm->name = t;
@@ -995,6 +1015,20 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     }
   }
 
+  // 只修复目标端实际存在的表；否则 DECLARE 失败会把 PG 事务打成 aborted，
+  // 后续表（包括真正需要修复的表）都会被跳过。
+  std::vector<std::string> target_tables;
+  if (dst->list_tables(target_tables).ok() && !target_tables.empty()) {
+    std::unordered_set<std::string> present(target_tables.begin(),
+                                            target_tables.end());
+    snapshot.erase(
+        std::remove_if(snapshot.begin(), snapshot.end(),
+                       [&](const std::shared_ptr<TableMetric>& t) {
+                         return present.count(t->name) == 0;
+                       }),
+        snapshot.end());
+  }
+
   int repaired = 0;
   for (auto& t : snapshot) {
     if (!t || t->total <= 0) continue;
@@ -1035,16 +1069,38 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         bool hb = refill(*dst, rb, ib);
         int64_t missing = 0, extra = 0;
         std::vector<std::string> dbuf;
+        bool repair_failed = false;
         auto flush_w = [&]() {
           if (!wbuf.empty()) {
-            tgt.write_batch(t->name, wbuf);
+            Status ws = tgt.write_batch(t->name, wbuf);
+            if (!ws.ok()) {
+              m.log("[error] repair write " + t->name + ": " + ws.str());
+              repair_failed = true;
+            }
+            // COPY is still active here; end it before any DELETE runs.
+            Status cs = tgt.commit();
+            if (!cs.ok()) {
+              m.log("[error] repair write-commit " + t->name + ": " + cs.str());
+              repair_failed = true;
+            }
             wbuf.clear();
           }
         };
         auto flush_d = [&]() {
-          for (auto& lit : dbuf)
-            tgt.exec_sql(tgt.delete_sql(t->name, pk->name, lit));
-          if (!dbuf.empty()) tgt.commit();
+          for (auto& lit : dbuf) {
+            Status ds = tgt.exec_sql(tgt.delete_sql(t->name, pk->name, lit));
+            if (!ds.ok()) {
+              m.log("[error] repair delete " + t->name + ": " + ds.str());
+              repair_failed = true;
+            }
+          }
+          if (!dbuf.empty()) {
+            Status cs = tgt.commit();
+            if (!cs.ok()) {
+              m.log("[error] repair commit " + t->name + ": " + cs.str());
+              repair_failed = true;
+            }
+          }
           dbuf.clear();
         };
         while (ha || hb) {
@@ -1083,9 +1139,17 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         }
         flush_w();
         flush_d();
-        tgt.commit();
+        Status fcs = tgt.commit();
+        if (!fcs.ok()) {
+          m.log("[error] repair final commit " + t->name + ": " + fcs.str());
+          repair_failed = true;
+        }
         src.close_cursor();
         dst->close_cursor();
+        if (repair_failed) {
+          tgt.rollback();
+          return Status::Err(Code::kDb, "repair failed for " + t->name);
+        }
         m.log("repair " + t->name + ": +" + std::to_string(missing) + " / -" +
               std::to_string(extra) + " (stream)");
         repaired += 1;
