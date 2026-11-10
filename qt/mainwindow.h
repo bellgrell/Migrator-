@@ -42,6 +42,8 @@ class MainWindow : public QMainWindow {
   void appendLog(const QString& line);
   void loadModuleConfig();
   void saveModuleConfig() const;
+  void loadVerifyConfig();
+  void saveVerifyConfig() const;
 
   QComboBox* mode_ = nullptr;
   QLineEdit* source_ = nullptr;
@@ -52,6 +54,7 @@ class MainWindow : public QMainWindow {
   QSpinBox* throttleSpin_ = nullptr;
   QSpinBox* workersSpin_ = nullptr;
   QCheckBox* verifyChk_ = nullptr;
+  QComboBox* verifyMode_ = nullptr;
   QCheckBox* pgCdcChk_ = nullptr;
   QCheckBox* repairChk_ = nullptr;
   QCheckBox* metricsChk_ = nullptr;

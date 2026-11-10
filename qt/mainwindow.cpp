@@ -301,6 +301,12 @@ void MainWindow::buildUi() {
   verifyChk_ = new QCheckBox("迁移后校验", central);
   verifyChk_->setChecked(true);
 
+  verifyMode_ = new QComboBox(central);
+  verifyMode_->addItem("本地优先（2MB）", "local");
+  verifyMode_->addItem("远程优先（8MB）", "remote");
+  verifyMode_->addItem("仅行数（最快）", "count_only");
+  connect(verifyChk_, &QCheckBox::toggled, verifyMode_, &QComboBox::setEnabled);
+
   pgCdcChk_ = new QCheckBox("PostgreSQL CDC", central);
   repairChk_ = new QCheckBox("差异修复", central);
   metricsChk_ = new QCheckBox("Prometheus 指标", central);
@@ -335,6 +341,11 @@ void MainWindow::buildUi() {
   form->addWidget(new QLabel("并行", central), r, 0);
   form->addWidget(workersSpin_, r, 1);
   form->addWidget(verifyChk_, r, 6);
+
+  ++r;
+  form->addWidget(new QLabel("校验策略", central), r, 0);
+  form->addWidget(verifyMode_, r, 1, 1, 3);
+  form->addWidget(new QLabel("仅行数=关闭内容校验", central), r, 4, 1, 3);
 
   ++r;
   form->addWidget(new QLabel("模块", central), r, 0);
@@ -424,6 +435,7 @@ void MainWindow::buildUi() {
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   scroll->setWidget(central);
   setCentralWidget(scroll);
+  loadVerifyConfig();
 }
 
 void MainWindow::setRunning(bool running) {
@@ -438,6 +450,7 @@ void MainWindow::setRunning(bool running) {
   batchSpin_->setEnabled(!running);
   throttleSpin_->setEnabled(!running);
   workersSpin_->setEnabled(!running);
+  if (verifyMode_) verifyMode_->setEnabled(!running && verifyChk_->isChecked());
   if (tableList_) tableList_->setEnabled(!running);
   if (loadTablesBtn_) loadTablesBtn_->setEnabled(!running);
   if (allTablesBtn_) allTablesBtn_->setEnabled(!running);
@@ -479,6 +492,40 @@ void MainWindow::saveModuleConfig() const {
   if (!QFile::exists(path)) {
     if (QFile::exists("../config/modules.json")) path = "../config/modules.json";
     else if (QFile::exists("../../config/modules.json")) path = "../../config/modules.json";
+  }
+  QFile f(path);
+  if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    f.write(QJsonDocument(o).toJson(QJsonDocument::Indented));
+  }
+}
+
+void MainWindow::loadVerifyConfig() {
+  QString path = "config/verify.json";
+  if (!QFile::exists(path)) {
+    if (QFile::exists("../config/verify.json")) path = "../config/verify.json";
+    else if (QFile::exists("../../config/verify.json"))
+      path = "../../config/verify.json";
+  }
+  QString mode = "local";
+  QFile f(path);
+  if (f.open(QIODevice::ReadOnly)) {
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    mode = o.value("mode").toString("local");
+  }
+  int idx = verifyMode_->findData(mode);
+  if (idx < 0) idx = 0;
+  verifyMode_->setCurrentIndex(idx);
+  verifyMode_->setEnabled(verifyChk_->isChecked());
+}
+
+void MainWindow::saveVerifyConfig() const {
+  QJsonObject o;
+  o["mode"] = verifyMode_->currentData().toString();
+  QString path = "config/verify.json";
+  if (!QFile::exists(path)) {
+    if (QFile::exists("../config/verify.json")) path = "../config/verify.json";
+    else if (QFile::exists("../../config/verify.json"))
+      path = "../../config/verify.json";
   }
   QFile f(path);
   if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -568,6 +615,18 @@ void MainWindow::onStart() {
   o.sim_rows = rowsSpin_->value();
   o.sim_tables = tablesSpin_->value();
   o.do_verify = verifyChk_->isChecked();
+  const QString vmode = verifyMode_->currentData().toString();
+  if (vmode == "remote") {
+    o.checksum = true;
+    o.checksum_batch_bytes = 8 * 1024 * 1024;
+  } else if (vmode == "count_only") {
+    o.checksum = false;
+    o.checksum_batch_bytes = 0;
+  } else {
+    o.checksum = true;
+    o.checksum_batch_bytes = 2 * 1024 * 1024;
+  }
+  saveVerifyConfig();
   o.type_map_path = findTypeMap().toStdString();
   if (o.source_kind == "pg" || o.source_kind == "og") {
     if (o.target_kind == "mysql")
