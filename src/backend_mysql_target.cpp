@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "dsn_secret.h"
 
 namespace mig {
 namespace {
@@ -72,7 +73,7 @@ class MySqlTarget : public ITarget, public DbBase {
     const std::string host = dsn_get(opts_.target, "host", "127.0.0.1");
     const std::string port = dsn_get(opts_.target, "port", "3306");
     const std::string user = dsn_get(opts_.target, "user", "root");
-    const std::string pass = dsn_get(opts_.target, "password", "");
+    const std::string pass = resolve_secret(dsn_get(opts_.target, "password", ""));
     const std::string db = dsn_get(opts_.target, "db", "");
 
     if (!mysql_real_connect(conn_, host.c_str(), user.c_str(), pass.c_str(),

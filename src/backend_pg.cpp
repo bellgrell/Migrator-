@@ -19,6 +19,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "dsn_secret.h"
 
 namespace mig {
 namespace {
@@ -228,7 +229,7 @@ class PgTarget : public ITarget, public DbBase {
     const std::string port = dsn_get(opts_.target, "port", "5432");
     const std::string user = dsn_get(opts_.target, "user", "postgres");
     const std::string pw_key = std::string("pass") + "word";
-    const std::string pw = dsn_get(opts_.target, pw_key, "");
+    const std::string pw = resolve_secret(dsn_get(opts_.target, pw_key, ""));
     const std::string db = dsn_get(opts_.target, "db", "postgres");
 
     const std::string ci =

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "dsn_secret.h"
 
 namespace mig {
 namespace {
@@ -77,7 +78,7 @@ class PgSource : public ISource, public DbBase {
     const std::string port = dsn_get(dsn, "port", "5432");
     const std::string user = dsn_get(dsn, "user", "postgres");
     const std::string pw_key = std::string("pass") + "word";
-    const std::string pw = dsn_get(dsn, pw_key, "");
+    const std::string pw = resolve_secret(dsn_get(dsn, pw_key, ""));
     const std::string db = dsn_get(dsn, "db", "postgres");
 
     const std::string ci =
