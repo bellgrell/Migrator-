@@ -317,6 +317,8 @@ int main(int argc, char** argv) {
   }
 
   std::printf("mm-doctor  源=%s  目标=%s\n", st.c_str(), tt.c_str());
+  if (src.has("password")) warn("源 DSN", "含明文密码", "改用 ~/.pgpass，DSN 不写 password=");
+  if (tgt.has("password")) warn("目标 DSN", "含明文密码", "改用 ~/.pgpass，DSN 不写 password=");
   std::printf("----------------------------------------\n");
 
   auto probe = [](const Dsn& d, const std::string& kind, const char* label) {
