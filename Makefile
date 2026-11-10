@@ -53,7 +53,7 @@ CXXFLAGS += -DHAVE_PG -I$(PG_PREFIX)/include
 LDFLAGS  += -L$(PG_PREFIX)/lib -lpq
 endif
 
-.PHONY: all clean run lite full
+.PHONY: all clean run lite full doctor
 
 all: $(BIN)
 
@@ -64,6 +64,11 @@ $(BIN): $(OBJS)
 build/%.o: src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# 环境自检工具（独立二进制）
+doctor:
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) tools/doctor.cpp -o build/mm-doctor $(LDFLAGS) -lpthread
 
 clean:
 	rm -rf build
