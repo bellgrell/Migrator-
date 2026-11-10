@@ -169,9 +169,20 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
         std::to_string(job.schema.indexes.size()) + " secondary indexes)");
   m.log("DDL for " + job.name + ":\n" + job.ddl);
 
+  const ColumnDef* pk = single_pk(job.schema);
+  int pk_idx = -1;
+  if (pk) {
+    for (size_t i = 0; i < job.schema.columns.size(); ++i) {
+      if (job.schema.columns[i].name == pk->name) { pk_idx = (int)i; break; }
+    }
+  }
   if (o.truncate_target) {
     Status ds = tgt.drop_table(job.name);
     if (!ds.ok()) m.log("[warn] drop_table " + job.name + ": " + ds.str());
+  }
+  if (o.resume && !pk) {
+    m.log("[warn] resume " + job.name + ": no primary key, resetting target table");
+    tgt.drop_table(job.name);
   }
   Status st = tgt.create_table(job.schema, job.ddl);
   if (!st.ok()) {
@@ -182,13 +193,6 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     return false;
   }
 
-  const ColumnDef* pk = single_pk(job.schema);
-  int pk_idx = -1;
-  if (pk) {
-    for (size_t i = 0; i < job.schema.columns.size(); ++i) {
-      if (job.schema.columns[i].name == pk->name) { pk_idx = (int)i; break; }
-    }
-  }
   std::string after;
   if (o.resume && pk) after = read_checkpoint(o, job.name);
   if (o.resume && !pk)
