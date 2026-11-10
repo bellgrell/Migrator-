@@ -149,6 +149,8 @@ Dataset used for the measurements below: 5,110,000 rows in three tables (5,000,0
 
 The MySQL → openGauss run used a source database that also contained two temporary 1,000,000-row benchmark tables, hence 7,110,000 rows.
 
+Single-table primary-key range parallelism (`--workers 4`) measured: PostgreSQL → MySQL, 1.25M rows in 6.23 s / 200,517 rows/s (sequential 9.11 s / 137,168 rows/s, about 46% faster); openGauss → MySQL, 5M rows in 15.12 s / 330,621 rows/s. Both passed checksum verification.
+
 Typical table-level results with the same dataset:
 
 | Table | Rows | Notes |
@@ -175,7 +177,7 @@ Typical table-level results with the same dataset:
 - `--resume` is implemented for MySQL, PostgreSQL and openGauss sources; it requires a single-column primary key.
 - `--consistent-snapshot` uses a single source connection (MySQL: consistent snapshot + binlog position; PG/openGauss: REPEATABLE READ) and forces `workers=1`.
 - `--resume` and `--truncate` are mutually exclusive.
-- PostgreSQL/openGauss sources currently use a single sequential cursor; single-table range parallelism is implemented for MySQL sources only.
+- PostgreSQL/openGauss sources now support single-table primary-key range parallelism (`--workers`); `--resume` and `--consistent-snapshot` still use a single sequential cursor.
 - MySQL target bulk load uses `LOAD DATA LOCAL INFILE`; the server must have `local_infile=ON`. Tables with binary columns automatically fall back to batched INSERT.
 - openGauss target databases should be created with `DBCOMPATIBILITY='PG'`; if the account uses sha256 authentication, native libpq may require switching the migration account to md5.
 

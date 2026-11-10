@@ -231,6 +231,40 @@ class PgSource : public ISource {
     return Status::OK();
   }
 
+  Status pk_bounds(const std::string& table, const std::string& column,
+                   int64_t& lo, int64_t& hi) override {
+    const std::string q = "SELECT MIN(\"" + column + "\"), MAX(\"" + column +
+                          "\") FROM \"" + table + "\"";
+    PGresult* r = PQexec(conn_, q.c_str());
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
+      if (r) PQclear(r);
+      return Status::Err(Code::kDb, "pg pk_bounds failed: " + table);
+    }
+    const bool empty = PQntuples(r) == 0 || PQgetisnull(r, 0, 0) ||
+                       PQgetisnull(r, 0, 1);
+    if (!empty) {
+      lo = std::strtoll(PQgetvalue(r, 0, 0), nullptr, 10);
+      hi = std::strtoll(PQgetvalue(r, 0, 1), nullptr, 10);
+    }
+    PQclear(r);
+    if (empty) return Status::Err(Code::kNotFound, "empty table: " + table);
+    return Status::OK();
+  }
+
+  Status open_cursor_range(const std::string& table, const std::string& column,
+                           int64_t lo, int64_t hi) override {
+    close_cursor();
+    const std::string sel = "SELECT * FROM \"" + table + "\" WHERE \"" +
+                            column + "\" >= " + std::to_string(lo) +
+                            " AND \"" + column + "\" <= " +
+                            std::to_string(hi) + " ORDER BY \"" + column + "\"";
+    Status st = exec("DECLARE mig_cur NO SCROLL CURSOR FOR " + sel);
+    if (!st.ok()) st = exec("DECLARE mig_cur CURSOR FOR " + sel);
+    if (!st.ok()) return st;
+    cursor_open_ = true;
+    return Status::OK();
+  }
+
   Status open_cursor(const std::string& table) override {
     close_cursor();
     const std::string sel = "SELECT * FROM \"" + table + "\"";

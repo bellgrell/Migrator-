@@ -149,6 +149,8 @@ DSN 格式：`host=...;port=...;user=...;password=...;db=...`。
 
 MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因此是 7,110,000 行。
 
+单表主键区间并行（`--workers 4`）实测：PostgreSQL → MySQL 125 万行 6.23 s / 200,517 rows/s（顺序读取 9.11 s / 137,168 rows/s，提升约 46%）；openGauss → MySQL 500 万行 15.12 s / 330,621 rows/s。两项均 checksum PASS。
+
 同一数据集下的典型表级结果：
 
 | 表 | 行数 | 说明 |
@@ -175,7 +177,7 @@ MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因�
 - `--resume` 已支持 MySQL、PostgreSQL、openGauss 源，需要单列主键。
 - `--consistent-snapshot` 使用单条源连接（MySQL 用一致性快照 + binlog 位点；PG/openGauss 用 REPEATABLE READ），并强制 `workers=1`。
 - `--resume` 与 `--truncate` 互斥。
-- PostgreSQL/openGauss 源目前使用单游标顺序读取；单表区间并行只对 MySQL 源实现。
+- PostgreSQL/openGauss 源已支持单表主键区间并行（`--workers`）；`--resume` 与 `--consistent-snapshot` 仍使用单游标顺序读取。
 - MySQL 目标批量导入使用 `LOAD DATA LOCAL INFILE`，服务端需要开启 `local_infile=ON`；含二进制列的表会自动回退为批量 INSERT。
 - openGauss 目标库应使用 `DBCOMPATIBILITY='PG'` 创建；如果账号使用 sha256 认证，原生 libpq 可能需要把迁移账号切换为 md5。
 
