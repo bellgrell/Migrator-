@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "backends.h"
+#include "ddl_dialect.h"
 
 namespace mig {
 namespace {
@@ -157,71 +158,12 @@ std::string decode_newdecimal(const unsigned char* p, int precision, int scale,
   return out;
 }
 
-void replace_ci_local(std::string& s, const std::string& from, const std::string& to) {
-  std::string low = s;
-  for (char& c : low) c = (char)std::tolower((unsigned char)c);
-  std::string f = from;
-  for (char& c : f) c = (char)std::tolower((unsigned char)c);
-  size_t pos = 0;
-  while ((pos = low.find(f, pos)) != std::string::npos) {
-    s.replace(pos, from.size(), to);
-    low.replace(pos, from.size(), to);
-    pos += to.size();
-  }
-}
-
 std::string trim_printable(const std::string& in) {
   std::string out;
   for (unsigned char c : in) {
     if (c < 0x20 || c > 0x7E) break;
     out.push_back((char)c);
   }
-  return out;
-}
-
-std::string strip_db_prefix(const std::string& q, const std::string& db);
-
-std::string convert_ddl(const std::string& q, const std::string& db) {
-  std::string out = strip_db_prefix(q, db);
-  // MySQL binlog 的 DDL 常带 "use `db`;" 前缀，目标端不需要这条语句
-  {
-    std::string low = out;
-    for (char& c : low) c = (char)std::tolower((unsigned char)c);
-    size_t p = 0;
-    while (p < low.size() && std::isspace((unsigned char)low[p])) ++p;
-    if (low.compare(p, 4, "use ") == 0) {
-      const size_t semi = out.find(';', p);
-      if (semi != std::string::npos) out = out.substr(semi + 1);
-    }
-    size_t s = 0;
-    while (s < out.size() && std::isspace((unsigned char)out[s])) ++s;
-    out = out.substr(s);
-  }
-  const char bt = (char)96;
-  for (char& c : out) {
-    if (c == bt) c = '"';
-  }
-  const size_t last_paren = out.rfind(')');
-  if (last_paren != std::string::npos) {
-    std::string tail = out.substr(last_paren + 1);
-    std::string low = tail;
-    for (char& c : low) c = (char)std::tolower((unsigned char)c);
-    if (low.find("engine=") != std::string::npos ||
-        low.find("charset=") != std::string::npos ||
-        low.find("collate=") != std::string::npos ||
-        low.find("auto_increment=") != std::string::npos) {
-      out = out.substr(0, last_paren + 1) + ";";
-    }
-  }
-  return out;
-}
-
-std::string strip_db_prefix(const std::string& q, const std::string& db) {
-  std::string out = q;
-  if (db.empty()) return out;
-  const char bt = (char)96;
-  replace_ci_local(out, std::string(1, bt) + db + std::string(1, bt) + ".", "");
-  replace_ci_local(out, db + ".", "");
   return out;
 }
 
@@ -325,6 +267,7 @@ bool decode_value(uint8_t type, int m1, int m2, const unsigned char* p, size_t l
 struct BinlogReader::Impl {
   MYSQL* conn = nullptr;
   std::string src_db;
+  std::unique_ptr<IDdlDialect> ddl;
   MYSQL_RPL rpl{};
   bool opened = false;
   size_t checksum_len = 0;  // CRC32 时事件尾部多 4 字节
@@ -376,6 +319,7 @@ Status BinlogReader::open(const Options& o, const std::string& file, uint64_t po
   }
 
   impl_->src_db = db;
+  impl_->ddl = make_ddl_dialect(o.target_kind);
   std::memset(&impl_->rpl, 0, sizeof(impl_->rpl));
   impl_->rpl.file_name = file.c_str();
   impl_->rpl.file_name_length = file.size();
@@ -506,7 +450,9 @@ Status BinlogReader::next(bool& has_event, std::vector<CdcEvent>& events) {
       CdcEvent ev;
       ev.is_ddl = true;
       ev.table = dbname;
-      ev.ddl = convert_ddl(trim_printable(query), dbname.empty() ? impl_->src_db : dbname);
+      const std::string raw_ddl = trim_printable(query);
+      const std::string src_db = dbname.empty() ? impl_->src_db : dbname;
+      ev.ddl = impl_->ddl ? impl_->ddl->convert(raw_ddl, src_db) : raw_ddl;
       events.push_back(std::move(ev));
     }
     has_event = !events.empty();

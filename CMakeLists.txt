@@ -13,6 +13,7 @@ option(MIG_ENABLE_RESUME   "Primary-key resume" ON)
 
 add_library(migrator_core STATIC
   src/core.cpp
+  src/ddl_dialect.cpp
   src/metrics.cpp
   src/pipeline.cpp
   src/backend_sim.cpp
