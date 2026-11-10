@@ -504,6 +504,7 @@ Status BinlogReader::next(bool& has_event, std::vector<CdcEvent>& events) {
   auto it = impl_->maps.find(tid);
   if (it == impl_->maps.end()) return Status::OK();
   const Impl::TableMap& tm = it->second;
+  if (!impl_->src_db.empty() && tm.db != impl_->src_db) return Status::OK();
 
   size_t p = 8;
   if (type == 30 || type == 31 || type == 32) {
@@ -676,6 +677,15 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
   }
 
   m.log("cdc start: " + file + ":" + std::to_string(pos));
+  std::string until_file;
+  uint64_t until_pos = 0;
+  if (!o.cdc_until.empty()) {
+    const size_t c = o.cdc_until.find(':');
+    if (c != std::string::npos) {
+      until_file = o.cdc_until.substr(0, c);
+      until_pos = std::strtoull(o.cdc_until.substr(c + 1).c_str(), nullptr, 10);
+    }
+  }
 
   BinlogReader reader;
   Status st = reader.open(o, file, pos);
@@ -736,9 +746,28 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
       schemas.clear();
       continue;
     }
+    if (!until_file.empty() && reader.file() == until_file &&
+        reader.pos() >= until_pos) {
+      m.log("cdc caught up to " + until_file + ":" + std::to_string(until_pos));
+      break;
+    }
     if (!has) continue;
 
     for (const auto& ev : events) {
+      bool selected = true;
+      if (!o.only_tables.empty()) {
+        selected = false;
+        for (const auto& n : o.only_tables) {
+          if (n == ev.table) { selected = true; break; }
+        }
+      }
+      if (selected && !o.exclude_tables.empty()) {
+        for (const auto& n : o.exclude_tables) {
+          if (n == ev.table) { selected = false; break; }
+        }
+      }
+      if (!selected) continue;
+
       if (std::getenv("MIG_CDC_DEBUG")) {
         m.log(std::string("evt is_ddl=") + (ev.is_ddl ? "1" : "0") +
               " table=" + ev.table + " after=" + std::to_string(ev.after.size()) +
@@ -803,6 +832,20 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
     reconnects = 0;
     m.log("cdc applied " + std::to_string(applied) + " events, pos=" +
           std::to_string(reader.pos()));
+
+    std::string cur_file;
+    uint64_t cur_pos = 0;
+    if (current_binlog_pos(o, cur_file, cur_pos)) {
+      if (cur_file == reader.file() && cur_pos >= reader.pos())
+        m.cdc_lag_bytes.store((int64_t)(cur_pos - reader.pos()));
+      else
+        m.cdc_lag_bytes.store(0);
+    }
+    if (!until_file.empty() && reader.file() == until_file &&
+        reader.pos() >= until_pos) {
+      m.log("cdc caught up to " + until_file + ":" + std::to_string(until_pos));
+      break;
+    }
 
     if (max_events > 0 && applied >= max_events) break;
   }

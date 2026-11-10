@@ -71,6 +71,8 @@ void usage() {
       "  --mysql-ssl-mode <mode>       MySQL SSL 模式：DISABLED/PREFERRED/REQUIRED\n"
       "  --cdc-retries <N>             CDC 断线重连次数（默认 10）\n"
       "  --cdc-slot <name>             PG CDC 逻辑复制槽名（默认 migrator_slot）\n"
+      "  --cdc-until <file:pos>        MySQL CDC 追到该位点后停止（割接）\n"
+      "  --cdc-until-lsn <lsn>         PG CDC 追到该 LSN 后停止（割接）\n"
       "  --verify-only                 只校验不迁移\n"
       "\n"
       "CDC 增量:\n"
@@ -189,6 +191,8 @@ int main(int argc, char** argv) {
     else if (a == "--mysql-ssl-mode") o.mysql_ssl_mode = next();
     else if (a == "--cdc-retries") o.cdc_retries = std::stoi(next());
     else if (a == "--cdc-slot") o.cdc_slot = next();
+    else if (a == "--cdc-until") o.cdc_until = next();
+    else if (a == "--cdc-until-lsn") o.cdc_until_lsn = next();
     else if (a == "--only-tables") o.only_tables = split_list(next());
     else if (a == "--exclude-tables") o.exclude_tables = split_list(next());
     else if (a == "--disable-modules") o.disabled_modules = split_list(next());

@@ -135,6 +135,8 @@ struct Options {
   std::string cdc_position_path = "out/cdc-position.txt";
   int cdc_server_id = 987654321;
   int cdc_max_events = 0;
+  std::string cdc_until;      // MySQL CDC cutover file:pos
+  std::string cdc_until_lsn;  // PG CDC cutover LSN
   bool cdc_ddl = false;
   int64_t sim_rows = 200000;
   int sim_tables = 4;
@@ -163,6 +165,7 @@ struct Metrics {
   std::atomic<bool> metrics_enabled{true};
   std::atomic<bool> verified{false};
   std::atomic<int64_t> verify_mismatch{0};
+  std::atomic<int64_t> cdc_lag_bytes{0};
   double started_at = 0.0;
   double finished_at = 0.0;
 

@@ -54,6 +54,7 @@ std::string Metrics::status_json() {
   o << "\"errors\":" << errors.load() << ",";
   o << "\"batches\":" << batches.load() << ",";
   o << "\"bytes\":" << bytes_written.load() << ",";
+  o << "\"cdc_lag_bytes\":" << cdc_lag_bytes.load() << ",";
   o << "\"elapsed\":" << elapsed << ",";
   o << "\"rows_per_sec\":" << rps << ",";
   o << "\"eta\":" << eta << ",";
@@ -115,6 +116,7 @@ std::string Metrics::prometheus() {
   gauge("migrator_batches_total", "Batches", batches.load());
   gauge("migrator_bytes_written_total", "Bytes written", bytes_written.load());
   gauge("migrator_verify_mismatch", "Verification mismatches", verify_mismatch.load());
+  gauge("migrator_cdc_lag_bytes", "CDC replication lag in bytes", cdc_lag_bytes.load());
   o << "# HELP migrator_running 1 if migration is running\n# TYPE migrator_running gauge\n"
     << "migrator_running " << (running.load() ? 1 : 0) << "\n";
   o << "# HELP migrator_verified 1 if verification passed\n# TYPE migrator_verified gauge\n"

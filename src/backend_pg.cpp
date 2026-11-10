@@ -199,17 +199,32 @@ class PgTarget : public ITarget, public DbBase {
 
     std::string buf;
     const size_t per_row = rows[0].size() * 8 + 8;
-    buf.reserve(rows.size() * per_row);
+    const size_t flush_at = 4 * 1024 * 1024;
+    const size_t reserve_bytes = rows.size() * per_row;
+    buf.reserve(reserve_bytes < flush_at ? reserve_bytes : flush_at);
     for (const auto& r : rows) {
       for (size_t j = 0; j < r.size(); ++j) {
         if (j) buf += '\t';
         copy_value_append(buf, r[j]);
       }
       buf += '\n';
+      if (buf.size() >= flush_at) {
+        if (PQputCopyData(conn_, buf.data(), (int)buf.size()) != 1) {
+          return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
+        }
+        if (PQflush(conn_) < 0) {
+          return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
+        }
+        buf.clear();
+      }
     }
-
-    if (PQputCopyData(conn_, buf.data(), (int)buf.size()) != 1) {
-      return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
+    if (!buf.empty()) {
+      if (PQputCopyData(conn_, buf.data(), (int)buf.size()) != 1) {
+        return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
+      }
+      if (PQflush(conn_) < 0) {
+        return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
+      }
     }
 
     std::lock_guard<std::mutex> lk(mu_);

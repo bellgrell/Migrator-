@@ -432,6 +432,35 @@ Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
       if (!query_ok(conn, adv)) m.log("[warn] pg cdc advance: " + std::string(PQerrorMessage(conn)));
       save_position(o, last_lsn);
       m.log("pg cdc applied " + std::to_string(applied) + " changes, lsn=" + last_lsn);
+
+      const std::string lagq =
+          "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) "
+          "FROM pg_replication_slots WHERE slot_name=" + cq(slot);
+      PGresult* lr = PQexec(conn, lagq.c_str());
+      if (lr && PQresultStatus(lr) == PGRES_TUPLES_OK && PQntuples(lr) > 0 &&
+          !PQgetisnull(lr, 0, 0)) {
+        m.cdc_lag_bytes.store(
+            (int64_t)std::strtoll(PQgetvalue(lr, 0, 0), nullptr, 10));
+      }
+      if (lr) PQclear(lr);
+
+      if (!o.cdc_until_lsn.empty()) {
+        const std::string cmp = "SELECT pg_wal_lsn_diff(" + cq(last_lsn) +
+                                ", " + cq(o.cdc_until_lsn) + ")";
+        PGresult* cr = PQexec(conn, cmp.c_str());
+        if (cr && PQresultStatus(cr) == PGRES_TUPLES_OK && PQntuples(cr) > 0 &&
+            !PQgetisnull(cr, 0, 0)) {
+          const long long diff =
+              std::strtoll(PQgetvalue(cr, 0, 0), nullptr, 10);
+          PQclear(cr);
+          if (diff >= 0) {
+            m.log("pg cdc caught up to " + o.cdc_until_lsn);
+            break;
+          }
+        } else if (cr) {
+          PQclear(cr);
+        }
+      }
     }
 
     if (max_events > 0 && applied >= max_events) break;
