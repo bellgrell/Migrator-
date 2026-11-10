@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -213,6 +214,35 @@ class PgTarget : public ITarget, public DbBase {
 
   bool supports_upsert() const override { return !og_; }
 
+  // PostgreSQL/openGauss index names are schema-global.  Keep the
+  // table-scoped name mapping here so pipeline.cpp has no target branch.
+  std::string index_ddl(const std::string& table, const IndexDef& idx) override {
+    const std::string key = table + "." + idx.name;
+    auto it = index_names_.find(key);
+    if (it != index_names_.end()) {
+      IndexDef adjusted = idx;
+      adjusted.name = it->second;
+      return build_index_ddl(table, adjusted);
+    }
+    std::lock_guard<std::mutex> lk(index_mu_);
+    std::string name = idx.name;
+    int n = 0;
+    while (!used_index_names_.insert(name).second) {
+      name = idx.name + "_" + table;
+      if (n++ > 0) name += "_" + std::to_string(n);
+    }
+    index_names_[key] = name;
+    IndexDef adjusted = idx;
+    adjusted.name = name;
+    return build_index_ddl(table, adjusted);
+  }
+
+  void reset_names() override {
+    std::lock_guard<std::mutex> lk(index_mu_);
+    used_index_names_.clear();
+    index_names_.clear();
+  }
+
   int64_t written(const std::string& table) override {
     std::lock_guard<std::mutex> lk(mu_);
     if (!conn_) return 0;
@@ -340,7 +370,13 @@ class PgTarget : public ITarget, public DbBase {
   std::string copy_table_;
   std::mutex mu_;
   std::map<std::string, int64_t> written_;
+  std::map<std::string, std::string> index_names_;
+  static std::mutex index_mu_;
+  static std::set<std::string> used_index_names_;
 };
+
+std::mutex PgTarget::index_mu_;
+std::set<std::string> PgTarget::used_index_names_;
 
 }  // namespace
 

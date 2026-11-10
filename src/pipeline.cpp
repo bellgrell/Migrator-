@@ -713,19 +713,6 @@ bool prepare_jobs(ISource& src, ITarget& tgt, const TypeMap& tm, const Options& 
     jobs.push_back(std::move(job));
   }
 
-  // PostgreSQL 索引名在 schema 内唯一（MySQL 是每表唯一），跨表重名要加表名后缀
-  if (o.target_kind != "mysql") {
-    std::unordered_map<std::string, int> name_count;
-    for (const auto& j : jobs) {
-      for (const auto& idx : j.schema.indexes) name_count[idx.name] += 1;
-    }
-    for (auto& j : jobs) {
-      for (auto& idx : j.schema.indexes) {
-        if (name_count[idx.name] > 1) idx.name = idx.name + "_" + j.name;
-      }
-    }
-  }
-
   {
     std::lock_guard<std::mutex> lk(m.mu);
     m.tables.clear();
@@ -807,6 +794,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
   m.started_at = now_sec();
   m.running = true;
   m.phase = "connecting";
+  tgt.reset_names();  // 索引名等目标端注册表在每轮开始时清空
   m.log("batch=" + std::to_string(o.batch_size) + " workers=" +
         std::to_string(o.workers) + " indexes=" +
         (o.build_indexes ? "on" : "off") + " analyze=" +

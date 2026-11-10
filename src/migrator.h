@@ -265,6 +265,8 @@ class ITarget {
   virtual void close() = 0;
   virtual int64_t written(const std::string& table) = 0;
   virtual void reset_counters() {}
+  // 一轮迁移开始时清空目标端的名字注册表（索引名等）
+  virtual void reset_names() {}
   // 目标方言的建表 DDL（默认 PostgreSQL/openGauss 方言）
   virtual std::string build_ddl(const TableSchema& s);
   // 是否支持 INSERT ... ON CONFLICT（openGauss 不支持）
