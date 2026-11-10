@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "backends.h"
 
 #include <QLinearGradient>
 #include <QPainterPath>
@@ -12,6 +13,7 @@
 #include <QFile>
 #include <QFont>
 #include <QFrame>
+#include <QGroupBox>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -20,6 +22,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QScrollArea>
@@ -156,6 +159,33 @@ QString fmtBytes(long long b) {
 }  // namespace
 
 // ---------------- MainWindow ----------------
+namespace {
+struct ModePair { const char* mode; const char* s; const char* t; };
+bool applyMode(mig::Options& o) {
+  static const ModePair kModes[] = {
+      {"sim", "sim", "sim"},
+      {"mysql2pg", "mysql", "pg"},
+      {"mysql2og", "mysql", "og"},
+      {"pg2mysql", "pg", "mysql"},
+      {"pg2og", "pg", "og"},
+      {"og2pg", "og", "pg"},
+      {"og2mysql", "og", "mysql"},
+      {"mysql2mysql", "mysql", "mysql"},
+      {"mysql", "mysql", "mysql"},
+      {"postgres", "pg", "mysql"},
+      {"opengauss", "og", "mysql"},
+  };
+  for (const auto& m : kModes) {
+    if (o.mode == m.mode) {
+      o.source_kind = m.s;
+      o.target_kind = m.t;
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("mini-migrator — 数据库迁移");
   buildUi();
@@ -238,7 +268,7 @@ void MainWindow::buildUi() {
   form->setVerticalSpacing(8);
 
   mode_ = new QComboBox(central);
-  mode_->addItems({"sim", "mysql2pg", "mysql", "postgres", "opengauss"});
+  mode_->addItems({"sim", "mysql2pg", "mysql2og", "pg2mysql", "pg2og", "og2pg", "og2mysql", "mysql2mysql"});
 
   source_ = new QLineEdit(central);
   source_->setText("host=127.0.0.1;port=3306;user=root;db=demo");
@@ -318,6 +348,26 @@ void MainWindow::buildUi() {
   form->setColumnStretch(3, 3);
   root->addLayout(form);
 
+  // 表选择
+  auto* tableBox = new QGroupBox("表选择（勾选要迁移的表）", central);
+  auto* tableLayout = new QVBoxLayout(tableBox);
+  tableList_ = new QListWidget(tableBox);
+  tableList_->setFixedHeight(180);
+  tableLayout->addWidget(tableList_);
+  auto* tableBtns = new QHBoxLayout;
+  loadTablesBtn_ = new QPushButton("从源库加载表", tableBox);
+  allTablesBtn_ = new QPushButton("全选", tableBox);
+  noneTablesBtn_ = new QPushButton("全不选", tableBox);
+  tableBtns->addWidget(loadTablesBtn_);
+  tableBtns->addWidget(allTablesBtn_);
+  tableBtns->addWidget(noneTablesBtn_);
+  tableBtns->addStretch();
+  tableLayout->addLayout(tableBtns);
+  root->addWidget(tableBox);
+  connect(loadTablesBtn_, &QPushButton::clicked, this, &MainWindow::onLoadTables);
+  connect(allTablesBtn_, &QPushButton::clicked, this, &MainWindow::onSelectAllTables);
+  connect(noneTablesBtn_, &QPushButton::clicked, this, &MainWindow::onSelectNoneTables);
+
   // 进度条
   progress_ = new QProgressBar(central);
   progress_->setRange(0, 1000);
@@ -388,6 +438,10 @@ void MainWindow::setRunning(bool running) {
   batchSpin_->setEnabled(!running);
   throttleSpin_->setEnabled(!running);
   workersSpin_->setEnabled(!running);
+  if (tableList_) tableList_->setEnabled(!running);
+  if (loadTablesBtn_) loadTablesBtn_->setEnabled(!running);
+  if (allTablesBtn_) allTablesBtn_->setEnabled(!running);
+  if (noneTablesBtn_) noneTablesBtn_->setEnabled(!running);
 }
 
 void MainWindow::loadModuleConfig() {
@@ -432,6 +486,65 @@ void MainWindow::saveModuleConfig() const {
   }
 }
 
+void MainWindow::onLoadTables() {
+  if (running_) return;
+  mig::Options o;
+  o.mode = mode_->currentText().toStdString();
+  o.source = source_->text().toStdString();
+  o.target = target_->text().toStdString();
+  if (!applyMode(o)) {
+    appendLog("[fatal] 未知模式: " + mode_->currentText());
+    return;
+  }
+  o.opengauss = (o.target_kind == "og");
+  o.pg_source_uses_source = (o.source_kind == "pg" || o.source_kind == "og");
+  if (o.source_kind == "sim") {
+    tableList_->clear();
+    auto* item = new QListWidgetItem("sim 模式无需选择表");
+    item->setFlags(Qt::NoItemFlags);
+    tableList_->addItem(item);
+    appendLog("sim 模式无需选择表");
+    return;
+  }
+  mig::Status st;
+  auto src = mig::make_source(o, st);
+  if (!src) {
+    appendLog("[error] 源端: " + QString::fromStdString(st.str()));
+    return;
+  }
+  mig::Status cs = src->connect();
+  if (!cs.ok()) {
+    appendLog("[error] 连接源库: " + QString::fromStdString(cs.str()));
+    return;
+  }
+  std::vector<std::string> tables;
+  mig::Status ls = src->list_tables(tables);
+  if (!ls.ok()) {
+    appendLog("[error] 读取表: " + QString::fromStdString(ls.str()));
+    return;
+  }
+  tableList_->clear();
+  for (const auto& t : tables) {
+    auto* item = new QListWidgetItem(QString::fromStdString(t));
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+    item->setCheckState(Qt::Checked);
+    tableList_->addItem(item);
+  }
+  appendLog("已加载 " + QString::number((int)tables.size()) + " 张表");
+}
+
+void MainWindow::onSelectAllTables() {
+  if (!tableList_) return;
+  for (int i = 0; i < tableList_->count(); ++i)
+    tableList_->item(i)->setCheckState(Qt::Checked);
+}
+
+void MainWindow::onSelectNoneTables() {
+  if (!tableList_) return;
+  for (int i = 0; i < tableList_->count(); ++i)
+    tableList_->item(i)->setCheckState(Qt::Unchecked);
+}
+
 void MainWindow::onStart() {
   if (running_) return;
 
@@ -443,6 +556,12 @@ void MainWindow::onStart() {
   o.mode = mode_->currentText().toStdString();
   o.source = source_->text().toStdString();
   o.target = target_->text().toStdString();
+  if (!applyMode(o)) {
+    appendLog("[fatal] 未知模式: " + mode_->currentText());
+    return;
+  }
+  o.opengauss = (o.target_kind == "og");
+  o.pg_source_uses_source = (o.source_kind == "pg" || o.source_kind == "og");
   o.batch_size = batchSpin_->value();
   o.throttle_ms = throttleSpin_->value();
   o.workers = workersSpin_->value();
@@ -450,9 +569,27 @@ void MainWindow::onStart() {
   o.sim_tables = tablesSpin_->value();
   o.do_verify = verifyChk_->isChecked();
   o.type_map_path = findTypeMap().toStdString();
+  if (o.source_kind == "pg" || o.source_kind == "og") {
+    if (o.target_kind == "mysql")
+      o.type_map_path = "config/type_map.pg2mysql.json";
+  } else if (o.source_kind == "mysql" && o.target_kind == "mysql") {
+    o.type_map_path = "config/type_map.mysql.json";
+  }
   o.consistent_snapshot = snapshotChk_->isChecked();
   o.resume = resumeChk_->isChecked();
   o.repair = repairChk_->isChecked();
+  o.only_tables.clear();
+  if (tableList_ && tableList_->count() > 0) {
+    for (int i = 0; i < tableList_->count(); ++i) {
+      auto* item = tableList_->item(i);
+      if (item->checkState() == Qt::Checked)
+        o.only_tables.push_back(item->text().toStdString());
+    }
+    if (o.only_tables.empty()) {
+      appendLog("[error] 请至少勾选一张要迁移的表");
+      return;
+    }
+  }
   if (!pgCdcChk_->isChecked()) o.disabled_modules.push_back("pg_cdc");
   if (!repairChk_->isChecked()) o.disabled_modules.push_back("repair");
   if (!metricsChk_->isChecked()) o.disabled_modules.push_back("metrics");

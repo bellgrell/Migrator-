@@ -16,6 +16,8 @@ class QLabel;
 class QTableWidget;
 class QPlainTextEdit;
 class QCheckBox;
+class QListWidget;
+class QGroupBox;
 class QTimer;
 class SparkChart;
 
@@ -29,6 +31,9 @@ class MainWindow : public QMainWindow {
  private slots:
   void onStart();
   void onTick();
+  void onLoadTables();
+  void onSelectAllTables();
+  void onSelectNoneTables();
 
  private:
   void buildUi();
@@ -53,6 +58,10 @@ class MainWindow : public QMainWindow {
   QCheckBox* snapshotChk_ = nullptr;
   QCheckBox* resumeChk_ = nullptr;
   QPushButton* startBtn_ = nullptr;
+  QListWidget* tableList_ = nullptr;
+  QPushButton* loadTablesBtn_ = nullptr;
+  QPushButton* allTablesBtn_ = nullptr;
+  QPushButton* noneTablesBtn_ = nullptr;
 
   QProgressBar* progress_ = nullptr;
   QLabel* phase_ = nullptr;
