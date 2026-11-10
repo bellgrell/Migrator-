@@ -379,4 +379,47 @@ std::string build_ddl(const TableSchema& s) {
   out += ");\n";
   return out;
 }
+std::string ITarget::delete_row_sql(const TableSchema& s, const Row& row) {
+  if (s.primary_key.size() != 1) return "";
+  int pk = -1;
+  for (size_t i = 0; i < s.columns.size(); ++i) {
+    if (s.columns[i].name == s.primary_key[0]) { pk = (int)i; break; }
+  }
+  if (pk < 0 || (size_t)pk >= row.size()) return "";
+  return delete_sql(s.name, s.columns[(size_t)pk].name,
+                    row[(size_t)pk].sql_literal());
+}
+
+std::string ITarget::upsert_sql(const TableSchema& s, const Row& row) {
+  if (s.primary_key.size() != 1 || row.size() != s.columns.size()) return "";
+  int pk = -1;
+  for (size_t i = 0; i < s.columns.size(); ++i) {
+    if (s.columns[i].name == s.primary_key[0]) { pk = (int)i; break; }
+  }
+  if (pk < 0) return "";
+
+  std::string cols, vals, sets;
+  for (size_t i = 0; i < s.columns.size(); ++i) {
+    if (i) { cols += ","; vals += ","; }
+    cols += "\"" + s.columns[i].name + "\"";
+    vals += row[i].sql_literal();
+    if ((int)i != pk) {
+      if (!sets.empty()) sets += ",";
+      sets += "\"" + s.columns[i].name + "\"=EXCLUDED.\"" +
+              s.columns[i].name + "\"";
+    }
+  }
+  const std::string ins = "INSERT INTO \"" + s.name + "\" (" + cols +
+                          ") VALUES (" + vals + ")";
+  if (supports_upsert()) {
+    std::string sql = ins + " ON CONFLICT (\"" +
+                      s.columns[(size_t)pk].name + "\")";
+    sql += sets.empty() ? " DO NOTHING" : (" DO UPDATE SET " + sets);
+    return sql;
+  }
+  return delete_sql(s.name, s.columns[(size_t)pk].name,
+                    row[(size_t)pk].sql_literal()) +
+         " " + ins + ";";
+}
+
 }  // namespace mig

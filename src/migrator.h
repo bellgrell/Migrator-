@@ -281,6 +281,9 @@ class ITarget {
                                  const std::string& literal) {
     return "DELETE FROM \"" + table + "\" WHERE \"" + pk + "\" = " + literal + ";";
   }
+  // 行变更 SQL：CDC/repair 使用，由目标端决定 UPSERT/DELETE 方言
+  virtual std::string upsert_sql(const TableSchema& s, const Row& row);
+  virtual std::string delete_row_sql(const TableSchema& s, const Row& row);
   virtual Status drop_table(const std::string& table) {
     (void)table;
     return Status::Err(Code::kUnsupported, "drop_table not supported");

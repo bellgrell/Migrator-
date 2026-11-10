@@ -640,36 +640,12 @@ Status apply_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
                            std::to_string(s.columns.size()) + " image=" +
                            std::to_string(img.size()) + " (DDL 后需重读 schema)");
 
-  const std::string pkname = s.columns[pk].name;
-
-  if (ev.op == 2) {
-    const std::string sql = "DELETE FROM \"" + s.name + "\" WHERE \"" + pkname +
-                            "\" = " + img[pk].sql_literal() + ";";
-    return tgt.exec_sql(sql);
-  }
-
-  std::string cols, vals, sets;
-  for (size_t i = 0; i < s.columns.size(); ++i) {
-    if (i) { cols += ","; vals += ","; }
-    cols += "\"" + s.columns[i].name + "\"";
-    vals += img[i].sql_literal();
-    if ((int)i != pk) {
-      if (!sets.empty()) sets += ",";
-      sets += "\"" + s.columns[i].name + "\"=EXCLUDED.\"" + s.columns[i].name + "\"";
-    }
-  }
-
-  const std::string ins = "INSERT INTO \"" + s.name + "\" (" + cols +
-                          ") VALUES (" + vals + ")";
-  if (tgt.supports_upsert()) {
-    std::string sql = ins + " ON CONFLICT (\"" + pkname + "\")";
-    sql += sets.empty() ? " DO NOTHING" : (" DO UPDATE SET " + sets);
-    return tgt.exec_sql(sql);
-  }
-  // openGauss 不支持 ON CONFLICT：同一事务里先删后插，语义等价且幂等
-  const std::string del = "DELETE FROM \"" + s.name + "\" WHERE \"" + pkname +
-                          "\" = " + img[pk].sql_literal() + ";";
-  return tgt.exec_sql(del + " " + ins + ";");
+  const std::string sql = (ev.op == 2) ? tgt.delete_row_sql(s, img)
+                                      : tgt.upsert_sql(s, img);
+  if (sql.empty())
+    return Status::Err(Code::kInvalid,
+                       "target cannot build row change SQL for " + s.name);
+  return tgt.exec_sql(sql);
 }
 
 }  // namespace

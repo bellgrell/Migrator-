@@ -106,6 +106,32 @@ class MySqlTarget : public ITarget, public DbBase {
     return Status::OK();
   }
 
+  std::string upsert_sql(const TableSchema& s, const Row& row) override {
+    if (s.primary_key.size() != 1 || row.size() != s.columns.size()) return "";
+    int pk = -1;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (s.columns[i].name == s.primary_key[0]) { pk = (int)i; break; }
+    }
+    if (pk < 0) return "";
+    std::string cols, vals, sets;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (i) { cols += ","; vals += ","; }
+      cols += "`" + s.columns[i].name + "`";
+      vals += row[i].sql_literal();
+      if ((int)i != pk) {
+        if (!sets.empty()) sets += ",";
+        sets += "`" + s.columns[i].name + "`=VALUES(`" +
+                s.columns[i].name + "`)";
+      }
+    }
+    if (sets.empty()) {
+      sets = "`" + s.columns[(size_t)pk].name + "`=VALUES(`" +
+             s.columns[(size_t)pk].name + "`)";
+    }
+    return "INSERT INTO `" + s.name + "` (" + cols + ") VALUES (" + vals +
+           ") ON DUPLICATE KEY UPDATE " + sets + ";";
+  }
+
   std::string delete_sql(const std::string& table, const std::string& pk,
                          const std::string& literal) override {
     return "DELETE FROM `" + table + "` WHERE `" + pk + "` = " + literal + ";";
