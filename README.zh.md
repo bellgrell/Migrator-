@@ -130,8 +130,16 @@ Web 面板默认在 `http://127.0.0.1:8123/` 启动。加 `--exit` 表示迁移�
 | `--consistent-snapshot` | 关 | 一致性快照（MySQL 用 binlog 位点；PG/openGauss 用 REPEATABLE READ），自动 workers=1 |
 | `--resume` | 关 | 按主键水位断点续传 |
 | `--resume-dir` | out/resume | 断点文件目录 |
+| `--io-scheduler` | `fair` | 批 I/O 调度：`off` / `fair` / `scan` |
+| `--io-queue-depth` | 0 | 并发读批次数（0 = workers） |
+| `--io-prefetch` | 0 | 每区间预取批数（0 = 关闭） |
+| `--io-window` | 0 | SCAN 模式的区间窗口（0 = 自动） |
 
 DSN 格式：`host=...;port=...;user=...;password=...;db=...`。
+
+### I/O 调度
+
+`--io-scheduler fair`（默认）用 FIFO 轮转把读请求分给各区间，并限制同时在途的批读数量，避免某个区间长期占满源端；`scan` 只放行主键窗口内的区间，适合源表按主键聚簇存储的场景；`off` 关闭调度。`--io-prefetch` 为每个区间增加读前缓冲（读线程与写线程重叠），默认关闭，因为远程数据库下通常没有收益。调度器只控制客户端批读，物理磁盘调度仍由 OS/数据库引擎负责。
 
 ## 性能
 
@@ -150,6 +158,8 @@ DSN 格式：`host=...;port=...;user=...;password=...;db=...`。
 MySQL → openGauss 的源库还包含两张 100 万行的临时基准表，因此是 7,110,000 行。
 
 单表主键区间并行（`--workers 4`）实测：PostgreSQL → MySQL 125 万行 6.23 s / 200,517 rows/s（顺序读取 9.11 s / 137,168 rows/s，提升约 46%）；openGauss → MySQL 500 万行 15.12 s / 330,621 rows/s。两项均 checksum PASS。
+
+批 I/O 调度（`--io-scheduler fair --io-prefetch 0`）对比 `off`：PostgreSQL 125 万行 5.18 s / 241,276 rows/s（off 5.80 s / 215,442）；openGauss 500 万行 14.30 s / 349,703 rows/s（off 15.07 s / 331,851）。均 checksum PASS。
 
 同一数据集下的典型表级结果：
 

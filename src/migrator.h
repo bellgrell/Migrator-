@@ -89,6 +89,10 @@ struct Options {
   int batch_size = 1000;
   int commit_every = 10;
   int throttle_ms = 0;
+  std::string io_scheduler = "fair";  // off | fair | scan（批 I/O 调度策略）
+  int io_queue_depth = 0;              // 并发读批次数，0 = workers
+  int io_prefetch = 0;                 // 每区间预取批数（0=关闭；远程库通常无收益）
+  int io_window = 0;                   // SCAN 窗口，0 = 自动
   int workers = 1;
   int pk_min_rows = 1000000;  // 单表主键区间并行阈值（小表顺序更快）
   bool pk_parallel = true;   // 单表按主键区间并行

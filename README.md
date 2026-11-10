@@ -130,8 +130,16 @@ The web dashboard starts at `http://127.0.0.1:8123/` by default. Add `--exit` to
 | `--consistent-snapshot` | off | Consistent snapshot (MySQL: binlog position; PG/openGauss: REPEATABLE READ), forces workers=1 |
 | `--resume` | off | Resume full load from PK watermark |
 | `--resume-dir` | out/resume | Resume checkpoint directory |
+| `--io-scheduler` | `fair` | Batch I/O scheduling: `off` / `fair` / `scan` |
+| `--io-queue-depth` | 0 | Concurrent batch reads (0 = workers) |
+| `--io-prefetch` | 0 | Read-ahead batches per range (0 = off) |
+| `--io-window` | 0 | SCAN range window (0 = auto) |
 
 DSN format: `host=...;port=...;user=...;password=...;db=...`.
+
+### I/O scheduling
+
+`--io-scheduler fair` (default) hands batch reads to ranges in FIFO turns and bounds the number of in-flight reads, so one range cannot monopolize the source; `scan` only admits ranges inside a moving primary-key window, which suits tables clustered by primary key; `off` disables scheduling. `--io-prefetch` adds a read-ahead buffer per range (reader and writer overlap); it is off by default because it usually does not help with remote databases. The scheduler only controls client-side batch reads; physical disk scheduling remains with the OS/database engine.
 
 ## Performance
 
@@ -150,6 +158,8 @@ Dataset used for the measurements below: 5,110,000 rows in three tables (5,000,0
 The MySQL → openGauss run used a source database that also contained two temporary 1,000,000-row benchmark tables, hence 7,110,000 rows.
 
 Single-table primary-key range parallelism (`--workers 4`) measured: PostgreSQL → MySQL, 1.25M rows in 6.23 s / 200,517 rows/s (sequential 9.11 s / 137,168 rows/s, about 46% faster); openGauss → MySQL, 5M rows in 15.12 s / 330,621 rows/s. Both passed checksum verification.
+
+Batch I/O scheduling (`--io-scheduler fair --io-prefetch 0`) versus `off`: PostgreSQL, 1.25M rows in 5.18 s / 241,276 rows/s (off 5.80 s / 215,442); openGauss, 5M rows in 14.30 s / 349,703 rows/s (off 15.07 s / 331,851). Both passed checksum verification.
 
 Typical table-level results with the same dataset:
 

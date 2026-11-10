@@ -65,6 +65,10 @@ void usage() {
       "  --log-every <N>               每 N 批记一条日志（默认 10）\n"
       "  --out-dir <path>              日志目录（默认 out）\n"
       "  --throttle <ms>               每批休眠毫秒（默认 0）\n"
+      "  --io-scheduler <off|fair|scan> 批 I/O 调度策略（默认 fair）\n"
+      "  --io-queue-depth <N>          并发读批次数（默认 0 = workers）\n"
+      "  --io-prefetch <N>             每个区间预取批数（默认 2）\n"
+      "  --io-window <N>               SCAN 策略的区间窗口（默认自动）\n"
       "  --type-map <path>             类型映射（默认 config/type_map.json）\n"
       "  --tables-config <path>        表级策略（copy/rebuild/skip）\n"
       "  --no-index                    不迁移二级索引\n"
@@ -172,6 +176,10 @@ int main(int argc, char** argv) {
     else if (a == "--log-every") o.log_every = std::stoi(next());
     else if (a == "--out-dir") o.out_dir = next();
     else if (a == "--throttle") o.throttle_ms = std::stoi(next());
+    else if (a == "--io-scheduler") o.io_scheduler = next();
+    else if (a == "--io-queue-depth") o.io_queue_depth = std::stoi(next());
+    else if (a == "--io-prefetch") o.io_prefetch = std::stoi(next());
+    else if (a == "--io-window") o.io_window = std::stoi(next());
     else if (a == "--port") o.http_port = std::stoi(next());
     else if (a == "--type-map") { o.type_map_path = next(); type_map_explicit = true; }
     else if (a == "--tables-config") o.table_policy_path = next();

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "backends.h"
+#include "io_scheduler.h"
 
 namespace mig {
 namespace {
@@ -381,6 +382,13 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   const double t_start = now_sec();
   std::atomic<int> failures{0};
 
+  const IoPolicy sched_policy = parse_io_policy(o.io_scheduler);
+  const int sched_depth = o.io_queue_depth > 0 ? o.io_queue_depth : parts;
+  int sched_window = o.io_window > 0 ? o.io_window : parts;
+  if (sched_policy == IoPolicy::kScan && o.io_window <= 0)
+    sched_window = std::max(2, parts / 2);
+  IoScheduler sched(parts, sched_depth, sched_window, sched_policy);
+
   std::vector<std::thread> threads;
   for (int i = 0; i < parts; ++i) {
     const int64_t a = b[(size_t)i];
@@ -417,46 +425,121 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
       std::vector<Row> rows;
       int batch = 0;
       bool failed = false;
-      while (true) {
-        rows.clear();
-        Status fs = s->fetch_batch(batch_size, rows);
-        if (!fs.ok()) {
-          m.log("[error] fetch " + job.name + ": " + fs.str());
-          failed = true;
-          break;
-        }
-        if (rows.empty()) break;
+      const bool use_pipeline =
+          sched_policy != IoPolicy::kOff && o.io_prefetch > 0;
+      std::atomic<bool> reader_failed{false};
+      std::mutex err_mu;
+      std::string reader_err;
 
-        Status ws = g->write_batch(job.name, rows);
-        if (!ws.ok()) {
-          m.log("[error] write " + job.name + ": " + ws.str());
-          failed = true;
-          break;
-        }
-
-        const int64_t n = (int64_t)rows.size();
+      auto note_reader_error = [&](const std::string& e) {
+        std::lock_guard<std::mutex> lk(err_mu);
+        if (reader_err.empty()) reader_err = e;
+        reader_failed.store(true);
+      };
+      auto account = [&](const std::vector<Row>& got) {
+        const int64_t n = (int64_t)got.size();
         tmet->done += n;
         m.rows_done.fetch_add(n, std::memory_order_relaxed);
         m.batches.fetch_add(1, std::memory_order_relaxed);
         int64_t bytes_local = 0;
-        for (auto& r : rows) {
+        for (auto& r : got) {
           for (auto& v : r) bytes_local += (int64_t)(v.s.size() + 12);
         }
         m.bytes_written.fetch_add(bytes_local, std::memory_order_relaxed);
         ++batch;
+      };
 
-        if (o.commit_every > 0 && batch % o.commit_every == 0) {
-          Status cs = g->commit();
-          if (!cs.ok()) {
-            m.log("[error] commit " + job.name + ": " + cs.str());
+      if (!use_pipeline) {
+        while (true) {
+          rows.clear();
+          if (!sched.begin(i)) {
             failed = true;
             break;
           }
+          Status fs = s->fetch_batch(batch_size, rows);
+          sched.end(i);
+          if (!fs.ok()) {
+            m.log("[error] fetch " + job.name + ": " + fs.str());
+            failed = true;
+            break;
+          }
+          if (rows.empty()) break;
+
+          Status ws = g->write_batch(job.name, rows);
+          if (!ws.ok()) {
+            m.log("[error] write " + job.name + ": " + ws.str());
+            failed = true;
+            break;
+          }
+          account(rows);
+
+          if (o.commit_every > 0 && batch % o.commit_every == 0) {
+            Status cs = g->commit();
+            if (!cs.ok()) {
+              m.log("[error] commit " + job.name + ": " + cs.str());
+              failed = true;
+              break;
+            }
+          }
+          if (batch % 10 == 0) m.sample();
+          if (o.throttle_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(o.throttle_ms));
+          }
         }
-        if (batch % 10 == 0) m.sample();
-        if (o.throttle_ms > 0) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(o.throttle_ms));
+      } else {
+        BatchQueue q((size_t)o.io_prefetch);
+        std::thread reader([&]() {
+          std::vector<Row> buf;
+          while (true) {
+            if (!sched.begin(i)) break;
+            buf.clear();
+            Status fs = s->fetch_batch(batch_size, buf);
+            sched.end(i);
+            if (!fs.ok()) {
+              note_reader_error("fetch " + job.name + ": " + fs.str());
+              break;
+            }
+            if (buf.empty()) break;
+            if (!q.push(std::move(buf))) break;
+          }
+          q.close();
+          s->close_cursor();
+          sched.finish(i);
+        });
+
+        while (q.pop(rows)) {
+          Status ws = g->write_batch(job.name, rows);
+          if (!ws.ok()) {
+            m.log("[error] write " + job.name + ": " + ws.str());
+            failed = true;
+            break;
+          }
+          account(rows);
+
+          if (o.commit_every > 0 && batch % o.commit_every == 0) {
+            Status cs = g->commit();
+            if (!cs.ok()) {
+              m.log("[error] commit " + job.name + ": " + cs.str());
+              failed = true;
+              break;
+            }
+          }
+          if (batch % 10 == 0) m.sample();
+          if (o.throttle_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(o.throttle_ms));
+          }
         }
+
+        if (!failed && reader_failed.load()) {
+          std::lock_guard<std::mutex> lk(err_mu);
+          m.log("[error] " + reader_err);
+          failed = true;
+        }
+        if (failed) {
+          q.close();
+          sched.cancel(i);
+        }
+        reader.join();
       }
 
       if (!failed) {
@@ -468,7 +551,10 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
       } else {
         g->rollback();
       }
-      s->close_cursor();
+      if (!use_pipeline) {
+        s->close_cursor();
+        sched.finish(i);
+      }
       g->close();
       if (failed) {
         failures += 1;
@@ -478,6 +564,15 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
     });
   }
   for (auto& t : threads) t.join();
+
+  if (sched_policy != IoPolicy::kOff) {
+    m.log("io scheduler: policy=" + o.io_scheduler + " depth=" +
+          std::to_string(sched_depth) + " prefetch=" +
+          std::to_string(o.io_prefetch) + " peak_inflight=" +
+          std::to_string(sched.peak_inflight()) + " waits=" +
+          std::to_string(sched.wait_count()) + " avg_wait_ms=" +
+          std::to_string(sched.avg_wait_ms()));
+  }
 
   bool failed = failures.load() > 0;
 
