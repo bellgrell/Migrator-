@@ -13,6 +13,8 @@ option(MIG_ENABLE_RESUME   "Primary-key resume" ON)
 
 add_library(migrator_core STATIC
   src/core.cpp
+  src/checksum_normalizer.cpp
+  src/config_validator.cpp
   src/ddl_dialect.cpp
   src/job_scheduler.cpp
   src/metrics.cpp

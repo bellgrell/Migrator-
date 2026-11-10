@@ -7,6 +7,7 @@
 
 #include "cdc.h"
 #include "migrator.h"
+#include "config_validator.h"
 
 namespace {
 
@@ -220,6 +221,12 @@ int main(int argc, char** argv) {
   }
 
   if (!o.modules_config_path.empty()) load_modules_config(o.modules_config_path, o);
+
+  mig::Status vst = mig::validate_options(o);
+  if (!vst.ok()) {
+    std::fprintf(stderr, "[fatal] %s\n", vst.str().c_str());
+    return 2;
+  }
 
   if (o.consistent_snapshot && !o.module_enabled("snapshot")) {
     std::fprintf(stderr, "[fatal] snapshot module disabled\n");
