@@ -22,6 +22,7 @@
 #include <QLineEdit>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QScrollArea>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollBar>
@@ -212,7 +213,7 @@ void MainWindow::buildUi() {
                      font-family:Menlo,monospace; font-size:12px; }
   )");
 
-  auto* central = new QWidget(this);
+  auto* central = new QWidget;
   auto* root = new QVBoxLayout(central);
   root->setContentsMargins(16, 14, 16, 14);
   root->setSpacing(12);
@@ -354,18 +355,25 @@ void MainWindow::buildUi() {
   table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
   table_->verticalHeader()->setVisible(false);
   table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  table_->setMaximumHeight(180);
+  table_->setFixedHeight(320);
+  table_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
   root->addWidget(table_);
 
   // 日志
   log_ = new QPlainTextEdit(central);
   log_->setReadOnly(true);
   log_->setMaximumBlockCount(5000);
-  log_->setMinimumHeight(320);
-  log_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-  root->addWidget(log_, 3);
+  log_->setFixedHeight(320);
+  log_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  root->addWidget(log_);
 
-  setCentralWidget(central);
+  // 整页滚动：窗口较小时像网页一样向下滚，表状态和日志保持在页面中
+  auto* scroll = new QScrollArea(this);
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  scroll->setWidget(central);
+  setCentralWidget(scroll);
 }
 
 void MainWindow::setRunning(bool running) {
