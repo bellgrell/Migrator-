@@ -154,6 +154,51 @@ void handle(socket_t fd, Metrics& m) {
       body += on("resume", true) ? "true" : "false";
       body += "}";
     }
+  } else if (path == "/api/verify") {
+    ctype = "application/json; charset=utf-8";
+    if (method == "POST") {
+      std::string b = req_body;
+      size_t p = b.find("\"mode\"");
+      std::string mode;
+      if (p != std::string::npos) {
+        size_t c = b.find(':', p + 6);
+        if (c != std::string::npos) {
+          size_t q = b.find('"', c + 1);
+          if (q != std::string::npos) {
+            size_t e = b.find('"', q + 1);
+            if (e != std::string::npos) mode = b.substr(q + 1, e - q - 1);
+          }
+        }
+      }
+      if (mode != "local" && mode != "remote" && mode != "count_only") {
+        code = 400;
+        body = "{\"error\":\"bad mode\"}";
+      } else {
+        std::ofstream out("config/verify.json", std::ios::trunc);
+        out << "{\"mode\":\"" << mode << "\"}";
+        body = "{\"ok\":true,\"restart_required\":true}";
+      }
+    } else {
+      std::string mode = "local";
+      std::ifstream in("config/verify.json");
+      if (in) {
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        const std::string cfg = ss.str();
+        const size_t p = cfg.find("\"mode\"");
+        if (p != std::string::npos) {
+          const size_t c = cfg.find(':', p + 6);
+          if (c != std::string::npos) {
+            const size_t q = cfg.find('"', c + 1);
+            if (q != std::string::npos) {
+              const size_t e = cfg.find('"', q + 1);
+              if (e != std::string::npos) mode = cfg.substr(q + 1, e - q - 1);
+            }
+          }
+        }
+      }
+      body = "{\"mode\":\"" + mode + "\"}";
+    }
   } else if (path == "/api/health") {
     body = "{\"ok\":true}";
   } else if (path == "/api/features") {

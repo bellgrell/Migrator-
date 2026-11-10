@@ -129,6 +129,7 @@ std::string fmt_num(int64_t v) {
 
 int main(int argc, char** argv) {
   mig::Options o;
+  mig::load_verify_config("config/verify.json", o);
   bool exit_after = false;
   bool verify_only = false;
   bool cdc_only = false;

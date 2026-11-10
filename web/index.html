@@ -145,6 +145,20 @@
     </div>
     <div class="dim" style="margin-top:8px;font-size:12px" data-i18n="modulesHint">Compiled-in modules; rebuild to change.</div>
   </section>
+
+  <section class="panel">
+    <h2 data-i18n="verifyTitle">校验策略</h2>
+    <div class="chips" id="verifyForm">
+      <label class="chip"><input type="radio" name="verifyMode" value="local"> <span data-i18n="verifyLocal">本地优先（2MB）</span></label>
+      <label class="chip"><input type="radio" name="verifyMode" value="remote"> <span data-i18n="verifyRemote">远程优先（8MB）</span></label>
+      <label class="chip"><input type="radio" name="verifyMode" value="count_only"> <span data-i18n="verifyCount">仅行数（最快）</span></label>
+    </div>
+    <div style="margin-top:10px">
+      <button id="saveVerify" class="btn" data-i18n="saveVerify">保存校验策略</button>
+      <span id="verifyMsg" class="dim" style="margin-left:8px"></span>
+    </div>
+    <div class="dim" style="margin-top:8px;font-size:12px" data-i18n="verifyHint">远程网络差时选“远程优先”或“仅行数”；重启 migrator 生效。</div>
+  </section>
 </main>
 
 <script>
@@ -159,6 +173,7 @@ var I18N = {
     chartTitle: "实时吞吐（rows/s）", tablesTitle: "表进度", eventsTitle: "事件流",
     modulesTitle: "模块", modulesHint: "编译期模块，修改需重新编译", on: "开启", off: "关闭",
     saveModules: "保存模块配置", savedRestart: "已保存，重启 migrator 后生效", notCompiled: "未编译", saveFailed: "保存失败",
+    verifyTitle: "校验策略", verifyLocal: "本地优先（2MB）", verifyRemote: "远程优先（8MB）", verifyCount: "仅行数（最快）", saveVerify: "保存校验策略", verifyHint: "远程网络差时选远程优先或仅行数；重启 migrator 生效。",
     tableName: "表名", status: "状态", done: "已迁移", total: "总数",
     errorsCol: "错误", progressCol: "进度",
     waitingData: "等待数据…", waitingSample: "等待采样…",
@@ -176,7 +191,8 @@ var I18N = {
     verifyPassed: "verify: passed ✓", verifyFailed: "verify: failed ({n} tables)",
     chartTitle: "Live throughput (rows/s)", tablesTitle: "Table progress",
     eventsTitle: "Event stream", modulesTitle: "Modules", modulesHint: "Compiled-in modules; rebuild to change.", on: "on", off: "off",
-    saveModules: "Save modules", savedRestart: "Saved; restart migrator to apply", notCompiled: "not compiled", saveFailed: "save failed", tableName: "Table", status: "Status",
+    saveModules: "Save modules", savedRestart: "Saved; restart migrator to apply", notCompiled: "not compiled", saveFailed: "save failed",
+    verifyTitle: "Verify strategy", verifyLocal: "Local (2MB)", verifyRemote: "Remote (8MB)", verifyCount: "Row count only", saveVerify: "Save verify strategy", verifyHint: "For slow remote links choose Remote or Row count only; restart migrator to apply.", tableName: "Table", status: "Status",
     done: "Done", total: "Total", errorsCol: "Errors", progressCol: "Progress",
     waitingData: "waiting for data…", waitingSample: "waiting for samples…",
     disconnected: "disconnected, retrying…",
@@ -193,7 +209,8 @@ var I18N = {
     verifyPassed: "проверка: успешно ✓", verifyFailed: "проверка: ошибок таблиц: {n}",
     chartTitle: "Текущая пропускная способность (строк/с)", tablesTitle: "Прогресс таблиц",
     eventsTitle: "Поток событий", modulesTitle: "Модули", modulesHint: "Модули задаются при сборке; для изменения пересоберите.", on: "вкл.", off: "выкл.",
-    saveModules: "Сохранить модули", savedRestart: "Сохранено; перезапустите migrator", notCompiled: "не собран", saveFailed: "ошибка сохранения", tableName: "Таблица", status: "Статус",
+    saveModules: "Сохранить модули", savedRestart: "Сохранено; перезапустите migrator", notCompiled: "не собран", saveFailed: "ошибка сохранения",
+    verifyTitle: "Стратегия проверки", verifyLocal: "Локально (2 МБ)", verifyRemote: "Удалённо (8 МБ)", verifyCount: "Только число строк", saveVerify: "Сохранить стратегию", verifyHint: "При медленной сети выберите «Удалённо» или «Только число строк»; перезапустите migrator.", tableName: "Таблица", status: "Статус",
     done: "Перенесено", total: "Всего", errorsCol: "Ошибки", progressCol: "Прогресс",
     waitingData: "ожидание данных…", waitingSample: "ожидание замеров…",
     disconnected: "соединение потеряно, повтор…",
@@ -208,6 +225,7 @@ function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 var lang = storeGet('mm-lang') || (navigator.language || 'en').slice(0, 2);
 if (lang !== 'zh' && lang !== 'ru') lang = 'en';
 var lastStatus = null, lastTables = null, lastSeries = null, lastEvents = null, lastFeatures = null, moduleConfig = null;
+var verifyLoaded = false;
 
 function t(k) {
   return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k;
@@ -385,6 +403,31 @@ async function saveModules(){
 }
 window.saveModules = saveModules;
 
+async function loadVerify(){
+  try {
+    var r = await fetch('/api/verify', {cache:'no-store'});
+    var j = await r.json();
+    var mode = j.mode || 'local';
+    var xs = document.querySelectorAll('#verifyForm input[name=verifyMode]');
+    for (var i = 0; i < xs.length; i++) xs[i].checked = (xs[i].value === mode);
+  } catch (e) {}
+}
+
+async function saveVerify(){
+  var xs = document.querySelectorAll('#verifyForm input[name=verifyMode]');
+  var mode = 'local';
+  for (var i = 0; i < xs.length; i++) if (xs[i].checked) mode = xs[i].value;
+  var msg = document.getElementById('verifyMsg');
+  try {
+    var r = await fetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})});
+    var j = await r.json();
+    msg.textContent = j.restart_required ? t('savedRestart') : t('saveVerify');
+  } catch (e) {
+    msg.textContent = t('saveFailed');
+  }
+}
+window.saveVerify = saveVerify;
+
 function drawChart(series){
   lastSeries = series;
   var cv=document.getElementById('chart');
@@ -440,6 +483,7 @@ async function tick(){
     var rf=await fetch('/api/features',{cache:'no-store'});
     renderFeatures(await rf.json());
     if (moduleConfig === null) await loadModules();
+    if (!verifyLoaded) { verifyLoaded = true; await loadVerify(); }
   }catch(e){
     document.getElementById('meta').textContent=t('disconnected');
   }
@@ -448,6 +492,7 @@ applyLang();
 tick();
 setInterval(tick, 600);
 document.getElementById('saveModules').addEventListener('click', saveModules);
+document.getElementById('saveVerify').addEventListener('click', saveVerify);
 window.addEventListener('resize', function(){ drawChart(lastSeries||[]); });
 </script>
 </body>

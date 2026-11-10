@@ -42,6 +42,37 @@ Status load_modules_config(const std::string& path, Options& o) {
   return Status::OK();
 }
 
+Status load_verify_config(const std::string& path, Options& o) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return Status::OK();
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  const std::string s = ss.str();
+  std::string mode = "local";
+  const size_t p = s.find("\"mode\"");
+  if (p != std::string::npos) {
+    const size_t c = s.find(':', p + 6);
+    if (c != std::string::npos) {
+      const size_t q = s.find('"', c + 1);
+      if (q != std::string::npos) {
+        const size_t e = s.find('"', q + 1);
+        if (e != std::string::npos) mode = s.substr(q + 1, e - q - 1);
+      }
+    }
+  }
+  if (mode == "remote") {
+    o.checksum = true;
+    o.checksum_batch_bytes = 8 * 1024 * 1024;
+  } else if (mode == "count_only") {
+    o.checksum = false;
+    o.checksum_batch_bytes = 0;
+  } else {
+    o.checksum = true;
+    o.checksum_batch_bytes = 2 * 1024 * 1024;
+  }
+  return Status::OK();
+}
+
 std::string Status::str() const {
   if (code == Code::kOk) return "OK";
   const char* n = "Unknown";

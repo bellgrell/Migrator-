@@ -324,6 +324,7 @@ bool checksum_equal(const Checksum& a, const Checksum& b);
 
 bool module_compiled(const std::string& name);
 Status load_modules_config(const std::string& path, Options& o);
+Status load_verify_config(const std::string& path, Options& o);
 
 std::string build_ddl(const TableSchema& s);
 std::string build_ddl_mysql(const TableSchema& s);
