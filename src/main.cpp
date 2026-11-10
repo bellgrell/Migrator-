@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-copy") o.use_copy = false;
     else if (a == "--no-checksum") o.checksum = false;
     else if (a == "--checksum-batch-bytes") o.checksum_batch_bytes = std::stoi(next());
+    else if (a == "--checksum-max-rows") o.checksum_max_rows = (std::size_t)std::stoll(next());
     else if (a == "--verify-only") verify_only = true;
     else if (a == "--with-views") o.with_views = true;
     else if (a == "--cdc") o.cdc = true;
@@ -273,15 +274,6 @@ int main(int argc, char** argv) {
   if (o.target_kind == "og") o.opengauss = true;
   if (o.source_kind == "pg" || o.source_kind == "og")
     o.pg_source_uses_source = true;
-
-  // L-01：PG/OG 源的 CDC 不支持以 MySQL 为目标。
-  // 放在全量之前校验，避免跑完几千万行才报错。
-  if (o.cdc && (o.source_kind == "pg" || o.source_kind == "og") &&
-      o.target_kind == "mysql") {
-    std::fprintf(stderr,
-                 "[fatal] PG/OG CDC target MySQL is not supported\n");
-    return 2;
-  }
 
   // L-05：全量 + 增量模式丢弃上次遗留的位点，避免重放旧事件。
   if (o.cdc && !cdc_only && o.cdc_start.empty()) {

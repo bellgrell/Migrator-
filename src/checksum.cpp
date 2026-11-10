@@ -21,9 +21,13 @@ uint64_t fnv1a(const std::string& s, uint64_t h) {
 }  // namespace
 
 Status compute_checksum(ISource& src, const std::string& table, int batch,
-                        Checksum& out, std::size_t max_bytes) {
+                        Checksum& out, std::size_t max_bytes,
+                        std::size_t max_rows, const std::string& order_col) {
   out = Checksum();
-  Status st = src.open_cursor(table);
+  // 限量校验必须按同一顺序取行，否则两端取到的不是同一批数据。
+  Status st = (max_rows > 0 && !order_col.empty())
+                  ? src.open_cursor_ordered(table, order_col)
+                  : src.open_cursor(table);
   if (!st.ok()) return st;
 
   int n = batch > 0 ? batch : 1000;
@@ -46,7 +50,9 @@ Status compute_checksum(ISource& src, const std::string& table, int batch,
       out.sum += h;
       out.xr ^= h;
       out.rows += 1;
+      if (max_rows > 0 && (std::size_t)out.rows >= max_rows) break;
     }
+    if (max_rows > 0 && (std::size_t)out.rows >= max_rows) break;
     if (max_bytes > 0 && !rows.empty()) {
       std::size_t bytes = rows.size() * 8;
       for (const auto& r : rows) {

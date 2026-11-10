@@ -129,6 +129,7 @@ struct Options {
   bool use_copy = true;
   bool checksum = true;
   int checksum_batch_bytes = 2097152;  // 校验批次字节预算
+  std::size_t checksum_max_rows = 0;   // 每表最多校验行数（0 = 不限）
   bool with_views = false;
   bool cdc = false;
   bool opengauss = false;  // 目标方言：openGauss（PG 协议 + 差异处理）
@@ -319,7 +320,9 @@ struct TypeMap {
 };
 
 Status compute_checksum(ISource& src, const std::string& table, int batch,
-                        Checksum& out, std::size_t max_bytes = 8 * 1024 * 1024);
+                        Checksum& out, std::size_t max_bytes = 8 * 1024 * 1024,
+                        std::size_t max_rows = 0,
+                        const std::string& order_col = std::string());
 bool checksum_equal(const Checksum& a, const Checksum& b);
 
 bool module_compiled(const std::string& name);

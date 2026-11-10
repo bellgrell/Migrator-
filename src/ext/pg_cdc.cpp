@@ -313,8 +313,8 @@ Status run_pg_cdc(const Options& o, Metrics& m, int max_events) {
   if (o.source_kind != "pg" && o.source_kind != "og")
     return Status::Err(Code::kUnsupported,
                        "PG CDC requires a PostgreSQL/openGauss source");
-  if (o.target_kind == "mysql")
-    return Status::Err(Code::kUnsupported, "PG CDC target MySQL is not supported");
+  // MySQL 目标已实现 upsert_sql / delete_row_sql，允许 PG 源向 MySQL 做增量。
+  // 若类型或 DDL 方言不兼容，会在 apply/DDL 阶段返回明确错误。
 
   PGconn* conn = PQconnectdb(pg_conninfo(o).c_str());
   if (!conn || PQstatus(conn) != CONNECTION_OK) {

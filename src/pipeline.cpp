@@ -974,10 +974,14 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           }
         }
         Checksum a, b;
+        const std::string pk_col =
+            schema.primary_key.empty() ? std::string() : schema.primary_key[0];
         const Status sa = compute_checksum(src, t->name, cbatch, a,
-                                           (std::size_t)o.checksum_batch_bytes);
+                                           (std::size_t)o.checksum_batch_bytes,
+                                           (std::size_t)o.checksum_max_rows, pk_col);
         const Status sb = compute_checksum(*dst, t->name, cbatch, b,
-                                           (std::size_t)o.checksum_batch_bytes);
+                                           (std::size_t)o.checksum_batch_bytes,
+                                           (std::size_t)o.checksum_max_rows, pk_col);
         if (!sa.ok() || !sb.ok()) {
           ++mismatch;
           m.log("[mismatch] checksum " + t->name + ": " +
