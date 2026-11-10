@@ -1,5 +1,6 @@
 #include "backends.h"
 #include "db_base.h"
+#include "local_file_loader.h"
 
 #include <mysql/mysql.h>
 
@@ -45,23 +46,6 @@ std::string safe_name(const std::string& s) {
       out.push_back('_');
   }
   return out;
-}
-
-// LOAD DATA 文本格式转义：\ \t \n \r \0
-std::string load_escape(const std::string& s) {
-  std::string o;
-  o.reserve(s.size() + 8);
-  for (unsigned char c : s) {
-    switch (c) {
-      case '\\': o += "\\\\"; break;
-      case '\t': o += "\\t"; break;
-      case '\n': o += "\\n"; break;
-      case '\r': o += "\\r"; break;
-      case 0: o += "\\0"; break;
-      default: o.push_back((char)c);
-    }
-  }
-  return o;
 }
 
 class MySqlTarget : public ITarget, public DbBase {
@@ -160,15 +144,8 @@ class MySqlTarget : public ITarget, public DbBase {
     auto& st = state(table);
     ensure_columns(table, st);
     if (load_enabled_ && st.load_ok() && !contains_bytes(rows)) {
-      if (!st.out.is_open()) open_file(st);
-      for (const auto& r : rows) {
-        for (size_t j = 0; j < r.size(); ++j) {
-          if (j) st.out.put('\t');
-          st.out << load_field(r[j]);
-        }
-        st.out.put('\n');
-      }
-      st.pending += (int64_t)rows.size();
+      if (!st.loader.is_open()) st.loader.open();
+      for (const auto& r : rows) st.loader.write_row(r);
     } else {
       Status s = insert_batch(table, rows);
       if (!s.ok()) return s;
@@ -196,23 +173,14 @@ class MySqlTarget : public ITarget, public DbBase {
   }
 
   Status rollback() override {
-    for (auto& kv : st_) {
-      if (kv.second.out.is_open()) kv.second.out.close();
-      std::error_code ec;
-      std::filesystem::remove(kv.second.path, ec);
-      kv.second.pending = 0;
-    }
+    for (auto& kv : st_) kv.second.loader.reset();
     if (!conn_) return Status::OK();
     if (mysql_rollback(conn_)) return err("rollback");
     return Status::OK();
   }
 
   void close() override {
-    for (auto& kv : st_) {
-      if (kv.second.out.is_open()) kv.second.out.close();
-      std::error_code ec;
-      std::filesystem::remove(kv.second.path, ec);
-    }
+    for (auto& kv : st_) kv.second.loader.reset();
     st_.clear();
     if (conn_) { mysql_close(conn_); conn_ = nullptr; }
   }
@@ -257,9 +225,7 @@ class MySqlTarget : public ITarget, public DbBase {
  private:
   struct TableState {
     std::vector<std::string> cols;
-    std::string path;
-    std::ofstream out;
-    int64_t pending = 0;
+    LocalFileLoader loader;
     bool binary = false;
     bool ensure_done = false;
     bool load_ok() const { return ensure_done && !binary; }
@@ -269,9 +235,9 @@ class MySqlTarget : public ITarget, public DbBase {
     auto it = st_.find(table);
     if (it != st_.end()) return it->second;
     TableState st;
-    st.path = "/tmp/mig-load-" + std::to_string((long)getpid()) + "-" +
-              std::to_string((unsigned long)(uintptr_t)this) + "-" +
-              safe_name(table) + ".tsv";
+    st.loader.set_path("/tmp/mig-load-" + std::to_string((long)getpid()) + "-" +
+                       std::to_string((unsigned long)(uintptr_t)this) + "-" +
+                       safe_name(table) + ".tsv");
     auto res = st_.emplace(table, std::move(st));
     return res.first->second;
   }
@@ -312,22 +278,13 @@ class MySqlTarget : public ITarget, public DbBase {
     return on;
   }
 
-  void reset_file(TableState& st) {
-    if (st.out.is_open()) st.out.close();
-    std::error_code ec;
-    std::filesystem::remove(st.path, ec);
-    st.pending = 0;
-  }
+  void reset_file(TableState& st) { st.loader.reset(); }
 
-  void open_file(TableState& st) {
-    std::error_code ec;
-    std::filesystem::remove(st.path, ec);
-    st.out.open(st.path, std::ios::binary | std::ios::trunc);
-  }
+  void open_file(TableState& st) { st.loader.open(); }
 
   Status flush_load(const std::string& table, TableState& st) {
-    if (!st.out.is_open() || st.pending == 0) return Status::OK();
-    st.out.close();
+    if (!st.loader.is_open() || st.loader.pending() == 0) return Status::OK();
+    st.loader.close_file();
     if (!load_enabled_) {
       return Status::Err(Code::kDb,
                          "LOAD DATA buffer without local_infile for " + table);
@@ -342,32 +299,14 @@ class MySqlTarget : public ITarget, public DbBase {
     else if (opts_.load_mode == "ignore") verb = "IGNORE ";
     else if (opts_.load_mode == "insert") verb = "";
     else verb = resume_ ? "IGNORE " : "";
-    std::string sql = "LOAD DATA LOCAL INFILE '" + st.path + "' " + verb +
+    std::string sql = "LOAD DATA LOCAL INFILE '" + st.loader.path() + "' " + verb +
                       "INTO TABLE `" + table + "` CHARACTER SET utf8mb4 "
                       "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
                       "LINES TERMINATED BY '\\n' (" + cols + ")";
     if (mysql_query(conn_, sql.c_str())) return err("load data " + table);
     consume_results();
-    std::error_code ec;
-    std::filesystem::remove(st.path, ec);
-    st.pending = 0;
+    st.loader.reset();
     return Status::OK();
-  }
-
-  std::string load_field(const Value& v) {
-    switch (v.type) {
-      case ValType::kNull: return "\\N";
-      case ValType::kInt: return std::to_string(v.i);
-      case ValType::kDouble: {
-        std::ostringstream o;
-        o << std::setprecision(17) << v.d;
-        return o.str();
-      }
-      case ValType::kBool: return v.b ? "1" : "0";
-      case ValType::kBytes: return load_escape(v.s);
-      case ValType::kString:
-      default: return load_escape(v.s);
-    }
   }
 
   bool contains_bytes(const std::vector<Row>& rows) {

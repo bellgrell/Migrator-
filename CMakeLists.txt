@@ -17,6 +17,7 @@ add_library(migrator_core STATIC
   src/config_validator.cpp
   src/ddl_dialect.cpp
   src/job_scheduler.cpp
+  src/local_file_loader.cpp
   src/logger.cpp
   src/metrics.cpp
   src/module.cpp
