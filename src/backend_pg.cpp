@@ -4,6 +4,9 @@
 
 #include <libpq-fe.h>
 
+#include <cctype>
+#include <ctime>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -113,6 +116,103 @@ void copy_value_append(std::string& out, const Value& v) {
   }
 }
 
+
+void append_be16(std::string& o, uint16_t v) {
+  o.push_back((char)((v >> 8) & 0xFF));
+  o.push_back((char)(v & 0xFF));
+}
+void append_be32(std::string& o, uint32_t v) {
+  o.push_back((char)((v >> 24) & 0xFF));
+  o.push_back((char)((v >> 16) & 0xFF));
+  o.push_back((char)((v >> 8) & 0xFF));
+  o.push_back((char)(v & 0xFF));
+}
+void append_be64(std::string& o, uint64_t v) {
+  for (int i = 7; i >= 0; --i) o.push_back((char)((v >> (8 * i)) & 0xFF));
+}
+std::string base_type(const std::string& t) {
+  std::string s;
+  for (char c : t) s.push_back((char)std::tolower((unsigned char)c));
+  const size_t p = s.find('(');
+  if (p != std::string::npos) s = s.substr(0, p);
+  size_t a = 0, b = s.size();
+  while (a < b && std::isspace((unsigned char)s[a])) ++a;
+  while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
+  return s.substr(a, b - a);
+}
+bool pg_binary_supported(const ColumnDef& c) {
+  const std::string t = base_type(c.dst_type);
+  return t == "smallint" || t == "int2" || t == "int" || t == "integer" ||
+         t == "int4" || t == "bigint" || t == "int8" || t == "boolean" ||
+         t == "bool" || t == "real" || t == "float4" ||
+         t == "double precision" || t == "float8" || t == "text" ||
+         t == "varchar" || t == "character varying" || t == "char" ||
+         t == "character" || t == "bytea" || t == "date" ||
+         t == "timestamp" || t == "timestamp without time zone";
+}
+bool parse_timestamp_us(const std::string& s, bool date_only, int64_t& out) {
+  int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+  if (date_only) {
+    if (std::sscanf(s.c_str(), "%d-%d-%d", &y, &mo, &d) != 3) return false;
+  } else {
+    if (std::sscanf(s.c_str(), "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se) < 6)
+      return false;
+  }
+  struct tm tm {};
+  tm.tm_year = y - 1900; tm.tm_mon = mo - 1; tm.tm_mday = d;
+  tm.tm_hour = h; tm.tm_min = mi; tm.tm_sec = se;
+  const time_t t = timegm(&tm);
+  if (t == (time_t)-1) return false;
+  if (date_only) {
+    out = (int64_t)((t - 946684800LL) / 86400);
+  } else {
+    out = (int64_t)(t - 946684800LL) * 1000000LL;
+    const size_t dot = s.find('.');
+    if (dot != std::string::npos) {
+      const double frac = std::atof(s.c_str() + dot);
+      out += (int64_t)(frac * 1000000.0 + 0.5);
+    }
+  }
+  return true;
+}
+bool encode_binary_value(std::string& out, const Value& v, const ColumnDef& c) {
+  const std::string t = base_type(c.dst_type);
+  auto to_i = [&]() -> int64_t {
+    if (v.type == ValType::kInt) return v.i;
+    if (v.type == ValType::kDouble) return (int64_t)v.d;
+    return std::strtoll(v.s.c_str(), nullptr, 10);
+  };
+  if (t == "smallint" || t == "int2") { append_be16(out, (uint16_t)to_i()); return true; }
+  if (t == "int" || t == "integer" || t == "int4") { append_be32(out, (uint32_t)to_i()); return true; }
+  if (t == "bigint" || t == "int8") { append_be64(out, (uint64_t)to_i()); return true; }
+  if (t == "boolean" || t == "bool") {
+    out.push_back((char)(((v.type == ValType::kBool) ? v.b : (to_i() != 0)) ? 1 : 0));
+    return true;
+  }
+  if (t == "real" || t == "float4") {
+    const float f = (v.type == ValType::kDouble) ? (float)v.d : (float)std::strtod(v.s.c_str(), nullptr);
+    uint32_t bits; std::memcpy(&bits, &f, sizeof bits); append_be32(out, bits); return true;
+  }
+  if (t == "double precision" || t == "float8") {
+    const double d = (v.type == ValType::kDouble) ? v.d : std::strtod(v.s.c_str(), nullptr);
+    uint64_t bits; std::memcpy(&bits, &d, sizeof bits); append_be64(out, bits); return true;
+  }
+  if (t == "text" || t == "varchar" || t == "character varying" || t == "char" || t == "character") {
+    if (v.type == ValType::kString || v.type == ValType::kBytes) out += v.s;
+    else out += v.sql_literal();
+    return true;
+  }
+  if (t == "bytea") { out += v.s; return true; }
+  if (t == "date" || t == "timestamp" || t == "timestamp without time zone") {
+    int64_t micros = 0;
+    if (!parse_timestamp_us(v.s, t == "date", micros)) return false;
+    if (t == "date") append_be32(out, (uint32_t)micros);
+    else append_be64(out, (uint64_t)micros);
+    return true;
+  }
+  return false;
+}
+
 class PgTarget : public ITarget, public DbBase {
  public:
   explicit PgTarget(const Options& o)
@@ -185,6 +285,7 @@ class PgTarget : public ITarget, public DbBase {
     if (!st.ok()) return st;
     std::lock_guard<std::mutex> lk(mu_);
     written_[s.name] = 0;
+    schemas_[s.name] = s;
     return Status::OK();
   }
 
@@ -192,6 +293,61 @@ class PgTarget : public ITarget, public DbBase {
     if (rows.empty()) return Status::OK();
     if (!use_copy_) return insert_batch(table, rows);
 
+    bool binary = false;
+    auto sit = schemas_.find(table);
+    if (!og_ && sit != schemas_.end()) {
+      bool has_bytea = false;
+      for (const auto& c : sit->second.columns) {
+        if (base_type(c.dst_type) == "bytea") { has_bytea = true; break; }
+      }
+      if (has_bytea) {
+        binary = true;
+        for (const auto& c : sit->second.columns) {
+          if (!pg_binary_supported(c)) { binary = false; break; }
+        }
+      }
+    }
+    if (binary) {
+      if (!copying_ || copy_table_ != table || !copy_binary_) {
+        Status st = begin_copy_binary(table);
+        if (!st.ok()) return st;
+      }
+      const TableSchema& s = schemas_[table];
+      std::string bbuf;
+      const size_t flush_at = 4 * 1024 * 1024;
+      bbuf.reserve(flush_at);
+      auto flush_b = [&]() -> Status {
+        if (bbuf.empty()) return Status::OK();
+        if (PQputCopyData(conn_, bbuf.data(), (int)bbuf.size()) != 1)
+          return Status::Err(Code::kDb, std::string("PQputCopyData: ") + PQerrorMessage(conn_));
+        if (PQflush(conn_) < 0)
+          return Status::Err(Code::kDb, std::string("PQflush: ") + PQerrorMessage(conn_));
+        bbuf.clear();
+        return Status::OK();
+      };
+      for (const auto& r : rows) {
+        if (r.size() != s.columns.size())
+          return Status::Err(Code::kInvalid, "binary copy column count mismatch");
+        append_be16(bbuf, (uint16_t)s.columns.size());
+        for (size_t j = 0; j < r.size(); ++j) {
+          if (r[j].type == ValType::kNull) { append_be32(bbuf, 0xFFFFFFFFu); continue; }
+          std::string field;
+          if (!encode_binary_value(field, r[j], s.columns[j]))
+            return Status::Err(Code::kInvalid, "binary copy unsupported type");
+          append_be32(bbuf, (uint32_t)field.size());
+          bbuf += field;
+        }
+        if (bbuf.size() >= flush_at) {
+          Status fs = flush_b();
+          if (!fs.ok()) return fs;
+        }
+      }
+      Status fs = flush_b();
+      if (!fs.ok()) return fs;
+      std::lock_guard<std::mutex> lk(mu_);
+      written_[table] += (int64_t)rows.size();
+      return Status::OK();
+    }
     if (!copying_ || copy_table_ != table) {
       Status st = begin_copy(table);
       if (!st.ok()) return st;
@@ -374,9 +530,53 @@ class PgTarget : public ITarget, public DbBase {
     return Status::OK();
   }
 
+  Status begin_copy_binary(const std::string& table) {
+    Status st = end_copy();
+    if (!st.ok()) return st;
+    std::string q = "COPY ";
+    q.push_back('"');
+    q += table;
+    q.push_back('"');
+    q += " FROM STDIN WITH (FORMAT binary)";
+    PGresult* r = PQexec(conn_, q.c_str());
+    if (!r) return Status::Err(Code::kDb, "COPY binary exec failed");
+    const bool ok = PQresultStatus(r) == PGRES_COPY_IN;
+    std::string e = ok ? std::string() : PQresultErrorMessage(r);
+    PQclear(r);
+    if (!ok) return Status::Err(Code::kDb, "COPY binary begin: " + e);
+
+    copying_ = true;
+    copy_table_ = table;
+    copy_binary_ = true;
+    std::string hdr = "PGCOPY";
+    hdr.push_back((char)10);
+    hdr.push_back((char)255);
+    hdr.push_back((char)13);
+    hdr.push_back((char)10);
+    hdr.push_back((char)0);
+    append_be32(hdr, 0);
+    append_be32(hdr, 0);
+    if (PQputCopyData(conn_, hdr.data(), (int)hdr.size()) != 1)
+      return Status::Err(Code::kDb, std::string("PQputCopyData hdr: ") + PQerrorMessage(conn_));
+    if (PQflush(conn_) < 0)
+      return Status::Err(Code::kDb, std::string("PQflush hdr: ") + PQerrorMessage(conn_));
+    return Status::OK();
+  }
+
   Status end_copy() {
     if (!copying_) return Status::OK();
+    const bool was_binary = copy_binary_;
     copying_ = false;
+    copy_binary_ = false;
+
+    if (was_binary) {
+      std::string tr;
+      append_be16(tr, (uint16_t)0xFFFF);
+      if (PQputCopyData(conn_, tr.data(), (int)tr.size()) != 1)
+        return Status::Err(Code::kDb, std::string("PQputCopyData tr: ") + PQerrorMessage(conn_));
+      if (PQflush(conn_) < 0)
+        return Status::Err(Code::kDb, std::string("PQflush tr: ") + PQerrorMessage(conn_));
+    }
 
     if (PQputCopyEnd(conn_, nullptr) != 1) {
       return Status::Err(Code::kDb, std::string("PQputCopyEnd: ") + PQerrorMessage(conn_));
@@ -422,7 +622,9 @@ class PgTarget : public ITarget, public DbBase {
   bool server_is_og_ = false;
   std::string server_version_;
   bool copying_ = false;
+  bool copy_binary_ = false;
   std::string copy_table_;
+  std::map<std::string, TableSchema> schemas_;
   std::mutex mu_;
   std::map<std::string, int64_t> written_;
   std::map<std::string, std::string> index_names_;
