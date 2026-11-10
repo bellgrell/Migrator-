@@ -360,8 +360,10 @@ void MainWindow::buildUi() {
   // 日志
   log_ = new QPlainTextEdit(central);
   log_->setReadOnly(true);
-  log_->setMaximumBlockCount(2000);
-  root->addWidget(log_, 1);
+  log_->setMaximumBlockCount(5000);
+  log_->setMinimumHeight(320);
+  log_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  root->addWidget(log_, 3);
 
   setCentralWidget(central);
 }

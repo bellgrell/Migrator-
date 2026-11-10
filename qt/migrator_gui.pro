@@ -19,12 +19,30 @@ SOURCES += \
     ../src/checksum.cpp \
     ../src/policy.cpp \
     ../src/views.cpp \
-    ../src/backends.cpp
+    ../src/backends.cpp \
+    ../src/job_scheduler.cpp \
+    ../src/ddl_dialect.cpp \
+    ../src/local_file_loader.cpp \
+    ../src/logger.cpp \
+    ../src/module.cpp \
+    ../src/pg_dialect.cpp \
+    ../src/checksum_normalizer.cpp \
+    ../src/config_validator.cpp
 
 HEADERS += \
     mainwindow.h \
     ../src/migrator.h \
-    ../src/backends.h
+    ../src/backends.h \
+    ../src/db_base.h \
+    ../src/io_scheduler.h \
+    ../src/job_scheduler.h \
+    ../src/local_file_loader.h \
+    ../src/logger.h \
+    ../src/module.h \
+    ../src/pg_dialect.h \
+    ../src/checksum_normalizer.h \
+    ../src/config_validator.h \
+    ../src/ddl_dialect.h
 
 MYSQL_PREFIX = /opt/homebrew/opt/mysql-client
 PG_PREFIX = /opt/homebrew/opt/libpq
