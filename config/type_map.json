@@ -15,7 +15,7 @@
     "mediumtext": "text",
     "longtext": "text",
     "datetime": "timestamp",
-    "timestamp": "timestamptz",
+    "timestamp": "timestamp",
     "date": "date",
     "time": "time",
     "year": "smallint",
