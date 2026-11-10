@@ -1,6 +1,8 @@
 #include "migrator.h"
 #include "checksum_normalizer.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -19,15 +21,16 @@ uint64_t fnv1a(const std::string& s, uint64_t h) {
 }  // namespace
 
 Status compute_checksum(ISource& src, const std::string& table, int batch,
-                        Checksum& out) {
+                        Checksum& out, std::size_t max_bytes) {
   out = Checksum();
   Status st = src.open_cursor(table);
   if (!st.ok()) return st;
 
+  int n = batch > 0 ? batch : 1000;
   std::vector<Row> rows;
   while (true) {
     rows.clear();
-    st = src.fetch_batch(batch > 0 ? batch : 1000, rows);
+    st = src.fetch_batch(n, rows);
     if (!st.ok()) {
       src.close_cursor();
       return st;
@@ -43,6 +46,17 @@ Status compute_checksum(ISource& src, const std::string& table, int batch,
       out.sum += h;
       out.xr ^= h;
       out.rows += 1;
+    }
+    if (max_bytes > 0 && !rows.empty()) {
+      std::size_t bytes = rows.size() * 8;
+      for (const auto& r : rows) {
+        for (const auto& v : r) bytes += v.s.size();
+      }
+      const double avg = (double)bytes / (double)rows.size();
+      int next_n = (int)((double)max_bytes / std::max(1.0, avg));
+      if (next_n < 1) next_n = 1;
+      if (next_n > 2000) next_n = 2000;
+      n = next_n;
     }
   }
   src.close_cursor();

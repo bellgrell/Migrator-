@@ -59,6 +59,7 @@ void usage() {
       "\n"
       "校验:\n"
       "  --no-checksum                 只比行数\n"
+      "  --checksum-batch-bytes <N>    校验批次字节预算（默认 2097152）\n"
       "  --no-verify                   跳过校验\n"
       "  --connect-timeout <sec>       连接/读写超时（默认 10）\n"
       "  --connect-retries <N>         连接失败重试次数（默认 3）\n"
@@ -171,6 +172,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-analyze") o.analyze_after = false;
     else if (a == "--no-copy") o.use_copy = false;
     else if (a == "--no-checksum") o.checksum = false;
+    else if (a == "--checksum-batch-bytes") o.checksum_batch_bytes = std::stoi(next());
     else if (a == "--verify-only") verify_only = true;
     else if (a == "--with-views") o.with_views = true;
     else if (a == "--cdc") o.cdc = true;

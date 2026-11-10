@@ -974,8 +974,10 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           }
         }
         Checksum a, b;
-        const Status sa = compute_checksum(src, t->name, cbatch, a);
-        const Status sb = compute_checksum(*dst, t->name, cbatch, b);
+        const Status sa = compute_checksum(src, t->name, cbatch, a,
+                                           (std::size_t)o.checksum_batch_bytes);
+        const Status sb = compute_checksum(*dst, t->name, cbatch, b,
+                                           (std::size_t)o.checksum_batch_bytes);
         if (!sa.ok() || !sb.ok()) {
           ++mismatch;
           m.log("[mismatch] checksum " + t->name + ": " +
