@@ -41,5 +41,7 @@ Status apply_cdc_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev);
 
 Status run_cdc(const Options& o, Metrics& m, int max_events = 0);
 Status run_pg_cdc(const Options& o, Metrics& m, int max_events = 0);
+// SQL Server（CDC 变更表）与 Oracle（LogMiner）的增量路径。
+Status run_odbc_cdc(const Options& o, Metrics& m, int max_events = 0);
 
 }  // namespace mig

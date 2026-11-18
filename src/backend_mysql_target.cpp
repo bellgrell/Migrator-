@@ -4,7 +4,7 @@
 
 #include <mysql/mysql.h>
 
-#include <unistd.h>
+#include "platform.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,7 +51,8 @@ std::string safe_name(const std::string& s) {
 
 class MySqlTarget : public ITarget, public DbBase {
  public:
-  explicit MySqlTarget(const Options& o) : DbBase(o), resume_(o.resume) {}
+  explicit MySqlTarget(const Options& o)
+      : DbBase(o), resume_(o.resume || o.idempotent) {}
   ~MySqlTarget() override { close(); }
 
   Status connect() override {
@@ -61,7 +62,7 @@ class MySqlTarget : public ITarget, public DbBase {
     mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
-#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000 && !defined(MARIADB_VERSION_ID)
     unsigned int sm = SSL_MODE_PREFERRED;
     if (opts_.mysql_ssl_mode == "DISABLED") sm = SSL_MODE_DISABLED;
     else if (opts_.mysql_ssl_mode == "REQUIRED") sm = SSL_MODE_REQUIRED;
@@ -122,6 +123,22 @@ class MySqlTarget : public ITarget, public DbBase {
     return "DELETE FROM `" + table + "` WHERE `" + pk + "` = " + literal + ";";
   }
 
+  std::string delete_row_sql(const TableSchema& s, const Row& row) override {
+    if (s.primary_key.empty() || row.size() != s.columns.size()) return "";
+    std::string where;
+    for (const auto& key : s.primary_key) {
+      int idx = -1;
+      for (size_t i = 0; i < s.columns.size(); ++i) {
+        if (s.columns[i].name == key) { idx = (int)i; break; }
+      }
+      if (idx < 0) return "";
+      if (!where.empty()) where += " AND ";
+      where += "`" + s.columns[(size_t)idx].name + "`=" +
+               row[(size_t)idx].sql_literal();
+    }
+    return "DELETE FROM `" + s.name + "` WHERE " + where + ";";
+  }
+
   Status drop_table(const std::string& table) override {
     return exec_sql("DROP TABLE IF EXISTS `" + table + "`;");
   }
@@ -137,6 +154,25 @@ class MySqlTarget : public ITarget, public DbBase {
     }
     st.ensure_done = true;
     reset_file(st);
+    return Status::OK();
+  }
+
+  void enable_idempotent() override { resume_ = true; }
+
+  Status table_columns(const std::string& table,
+                       std::vector<std::string>& out) override {
+    out.clear();
+    const std::string q =
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='" + table +
+        "' ORDER BY ORDINAL_POSITION";
+    if (mysql_query(conn_, q.c_str())) return err("table_columns");
+    MYSQL_RES* r = mysql_store_result(conn_);
+    if (!r) return err("table_columns result");
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(r)) != nullptr)
+      if (row[0]) out.push_back(row[0]);
+    mysql_free_result(r);
     return Status::OK();
   }
 
@@ -236,7 +272,13 @@ class MySqlTarget : public ITarget, public DbBase {
     auto it = st_.find(table);
     if (it != st_.end()) return it->second;
     TableState st;
-    st.loader.set_path("/tmp/mig-load-" + std::to_string((long)getpid()) + "-" +
+    std::error_code tec;
+    const std::string base =
+        (std::filesystem::temp_directory_path(tec).string().empty()
+             ? std::string("/tmp")
+             : std::filesystem::temp_directory_path(tec).string());
+    st.loader.set_path(base + "/mig-load-" +
+                       std::to_string((long)mig::mig_pid()) + "-" +
                        std::to_string((unsigned long)(uintptr_t)this) + "-" +
                        safe_name(table) + ".tsv");
     auto res = st_.emplace(table, std::move(st));

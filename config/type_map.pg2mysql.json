@@ -19,7 +19,17 @@
     "bytea": "longblob",
     "json": "json",
     "jsonb": "json",
-    "uuid": "char(36)"
+    "uuid": "char(36)",
+    "bit": "bit{args}",
+    "bit varying": "varbinary(255)",
+    "inet": "varchar(64)",
+    "cidr": "varchar(64)",
+    "macaddr": "varchar(32)",
+    "macaddr8": "varchar(32)",
+    "interval": "varchar(64)",
+    "xml": "longtext",
+    "money": "decimal(19,2)",
+    "oid": "bigint"
   },
   "columns": {}
 }

@@ -1,5 +1,7 @@
 #include "job_scheduler.h"
 
+#include "type_system.h"
+
 #include <string>
 
 namespace mig {
@@ -55,6 +57,16 @@ bool JobScheduler::prepare(
   }
 
   int64_t total = 0;
+  RuleSet type_rules;
+  if (!o.type_rules_path.empty()) {
+    std::string err;
+    if (!type_rules.load_tsv(o.type_rules_path, err))
+      m.log("[warn] type rules: " + err);
+  }
+  const std::string type_src_dialect =
+      (o.source_kind == "og") ? "pg" : o.source_kind;
+  const std::string type_dst_dialect =
+      (o.target_kind == "og") ? "pg" : o.target_kind;
   for (const auto& t : tables) {
     TablePolicy pol;
     auto it = policies.find(t);
@@ -83,17 +95,39 @@ bool JobScheduler::prepare(
       m.errors += 1;
       continue;
     }
+    bool type_error = false;
     for (auto& c : job.schema.columns) {
-      c.dst_type = tm.map_column(job.schema.name, c.name, c.src_type);
+      bool resolved = false;
+      if (o.use_type_rules) {
+        const auto rr =
+            type_rules.resolve(type_src_dialect, c.src_type, type_dst_dialect);
+        if (rr.ok && rr.loss != LossClass::kUnsupported) {
+          c.dst_type = RuleSet::type_name(rr.dst);
+          resolved = true;
+        } else if (!rr.note.empty()) {
+          m.log("[warn] type-rules fallback " + t + "." + c.name + ": " + rr.note);
+        }
+      }
+      if (!resolved) c.dst_type = tm.map_column(job.schema.name, c.name, c.src_type);
       if (o.target_kind == "mysql") {
         if (c.dst_type == "varchar") c.dst_type = "varchar(255)";
         else if (c.dst_type == "char") c.dst_type = "char(1)";
         else if (c.dst_type == "decimal" || c.dst_type == "numeric")
           c.dst_type = "decimal(65,30)";
       }
+      if (c.src_type.find("[]") != std::string::npos ||
+          c.dst_type.find("{args}") != std::string::npos ||
+          c.dst_type.empty()) {
+        m.log("[error] unsupported type " + t + "." + c.name + ": " +
+              c.src_type + " -> " + c.dst_type);
+        m.errors += 1;
+        type_error = true;
+        break;
+      }
     }
+    if (type_error) continue;
     job.ddl = tgt.build_ddl(job.schema);
-    job.rows = src.total_rows(t);
+    job.rows = o.skip_row_count ? 0 : src.total_rows(t);
     if (job.rows < 0) job.rows = 0;
     total += job.rows;
     jobs.push_back(std::move(job));

@@ -8,6 +8,9 @@ data/
 
 # generated test artifacts
 out/
+dist/
+_install/
+build-cmake/
 
 # internal docs and benchmark artifacts (kept locally)
 docs/

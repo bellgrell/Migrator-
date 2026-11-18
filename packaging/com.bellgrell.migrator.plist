@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bellgrell.migrator</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/migrator</string>
+    <string>--mode</string>
+    <string>sim</string>
+    <string>--rows</string>
+    <string>200000</string>
+    <string>--tables</string>
+    <string>4</string>
+    <string>--http-bind</string>
+    <string>127.0.0.1</string>
+    <string>--http-token-file</string>
+    <string>/usr/local/etc/mini-migrator/dashboard.token</string>
+    <string>--http-audit</string>
+    <string>/usr/local/var/log/mini-migrator/audit.log</string>
+    <string>--instance-lock</string>
+    <string>/usr/local/var/lib/mini-migrator/migrator.lock</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/lib/mini-migrator</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/mini-migrator/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/mini-migrator/stderr.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

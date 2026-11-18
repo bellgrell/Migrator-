@@ -1,0 +1,63 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+          - os: macos-14
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmysqlclient-dev libpq-dev libssl-dev unixodbc-dev
+      - name: deps (macos)
+        if: runner.os == 'macOS'
+        run: brew install mysql-client libpq openssl@3 unixodbc
+      - name: build
+        run: make -j4
+      - name: package (linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p out/bin out/lib
+          cp build/migrator out/bin/
+          ldd build/migrator | awk '/=> \//{print $3}' | while read lib; do
+            case "$lib" in /lib/*|/usr/lib/*) cp -L "$lib" out/lib/ ;; esac
+          done
+          cp -r config web out/ 2>/dev/null || true
+          printf '#!/bin/sh\nDIR=$(cd "$(dirname "$0")" && pwd)\nexport LD_LIBRARY_PATH="$DIR/lib"\nexec "$DIR/bin/migrator" "$@"\n' > out/run.sh
+          chmod +x out/run.sh
+          tar czf mini-migrator-${{ github.ref_name }}-${{ matrix.name }}.tar.gz -C out .
+      - name: package (macos)
+        if: runner.os == 'macOS'
+        run: python3 packaging/build-macos.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-migrator-${{ matrix.name }}
+          path: |
+            mini-migrator-*.tar.gz
+            mini-migrator-*.zip
+
+  windows-notes:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: native build is not supported yet
+        run: |
+          echo "Native Windows build requires porting flock/fork/unistd (see packaging/windows/README.md)."
+          echo "Use WSL2 or Docker with the Linux artifact."

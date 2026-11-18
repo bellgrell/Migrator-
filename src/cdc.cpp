@@ -10,6 +10,7 @@
 #include <ctime>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -18,6 +19,11 @@
 
 #include "backends.h"
 #include "ddl_dialect.h"
+
+#ifdef _WIN32
+// MSVC/MinGW 没有 localtime_r
+#define localtime_r(t, tm) localtime_s((tm), (t))
+#endif
 
 namespace mig {
 namespace {
@@ -264,6 +270,7 @@ bool decode_value(uint8_t type, int m1, int m2, const unsigned char* p, size_t l
 
 }  // namespace
 
+#if !defined(MARIADB_VERSION_ID)
 struct BinlogReader::Impl {
   MYSQL* conn = nullptr;
   std::string src_db;
@@ -576,12 +583,26 @@ Status BinlogReader::next(bool& has_event, std::vector<CdcEvent>& events) {
   return Status::OK();
 }
 
+#else  // MARIADB_VERSION_ID: MariaDB Connector/C has no binlog API
+struct BinlogReader::Impl {};
+BinlogReader::BinlogReader() : impl_(nullptr) {}
+BinlogReader::~BinlogReader() { close(); }
+void BinlogReader::close() {}
+Status BinlogReader::open(const Options&, const std::string&, uint64_t) {
+  return Status::Err(Code::kUnsupported,
+                     "MySQL binlog CDC requires the MySQL 8 client library");
+}
+Status BinlogReader::next(bool&, std::vector<CdcEvent>&) {
+  return Status::Err(Code::kUnsupported,
+                     "MySQL binlog CDC requires the MySQL 8 client library");
+}
+#endif
+
 namespace {
 
-bool current_binlog_pos(const Options& o, std::string& file, uint64_t& pos) {
+MYSQL* open_binlog_conn(const Options& o) {
   MYSQL* c = mysql_init(nullptr);
-  if (!c) return false;
-
+  if (!c) return nullptr;
   std::string host = "127.0.0.1", port = "3306", user = "root", db = "";
   std::istringstream ss(o.source);
   std::string item;
@@ -599,9 +620,32 @@ bool current_binlog_pos(const Options& o, std::string& file, uint64_t& pos) {
                           db.empty() ? nullptr : db.c_str(),
                           (unsigned)std::atoi(port.c_str()), nullptr, 0)) {
     mysql_close(c);
-    return false;
+    return nullptr;
   }
+  return c;
+}
 
+bool binlog_file_exists(const Options& o, const std::string& file) {
+  if (file.empty()) return false;
+  MYSQL* c = open_binlog_conn(o);
+  if (!c) return false;
+  bool found = false;
+  if (mysql_query(c, "SHOW BINARY LOGS") == 0) {
+    if (MYSQL_RES* r = mysql_store_result(c)) {
+      MYSQL_ROW row;
+      while ((row = mysql_fetch_row(r)) != nullptr) {
+        if (row[0] && file == row[0]) { found = true; break; }
+      }
+      mysql_free_result(r);
+    }
+  }
+  mysql_close(c);
+  return found;
+}
+
+bool current_binlog_pos(const Options& o, std::string& file, uint64_t& pos) {
+  MYSQL* c = open_binlog_conn(o);
+  if (!c) return false;
   bool ok = false;
   const char* queries[] = {"SHOW BINARY LOG STATUS", "SHOW MASTER STATUS"};
   for (const char* q : queries) {
@@ -655,6 +699,7 @@ Status apply_cdc_event(ITarget& tgt, const TableSchema& s, const CdcEvent& ev) {
   return apply_event(tgt, s, ev);
 }
 
+#if !defined(MARIADB_VERSION_ID)
 Status run_cdc(const Options& o, Metrics& m, int max_events) {
   std::string file;
   uint64_t pos = 0;
@@ -669,6 +714,14 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
   if (file.empty()) {
     std::ifstream in(o.cdc_position_path);
     if (in) { std::getline(in, file, ':'); in >> pos; }
+  }
+  // 位点文件可能来自更早的运行：binlog 被 PURGE 后该文件已不存在，
+  // 直接用它打开会得到 "Could not find first log file name"。
+  if (!file.empty() && !binlog_file_exists(o, file)) {
+    m.log("[warn] saved binlog " + file +
+          " no longer exists (purged?); restarting from current position");
+    file.clear();
+    pos = 0;
   }
   if (file.empty()) {
     if (!current_binlog_pos(o, file, pos)) {
@@ -703,6 +756,7 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
   }
 
   std::unordered_map<std::string, TableSchema> schemas;
+  std::map<std::string, std::set<std::string>> target_cols;
   int applied = 0;
   std::string last_file = file;
   uint64_t last_pos = pos;
@@ -753,6 +807,7 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
     }
     if (!has) continue;
 
+    bool batch_ok = true;
     for (const auto& ev : events) {
       bool selected = true;
       if (!o.only_tables.empty()) {
@@ -783,10 +838,12 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
             schemas.clear();
           } else {
             m.errors += 1;
+            batch_ok = false;
             m.log("[error] ddl: " + ds.str() + " | " + ev.ddl.substr(0, 120));
             if (std::getenv("MIG_CDC_DEBUG"))
               std::fprintf(stderr, "[cdc-err] ddl: %s | %s\n", ds.str().c_str(),
                            ev.ddl.substr(0, 200).c_str());
+            break;
           }
         } else {
           m.log("[ddl] skipped (use --cdc-ddl): " + ev.ddl.substr(0, 100));
@@ -800,33 +857,177 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
         TableSchema s;
         if (src->read_schema(ev.table, s).ok()) {
           schemas[ev.table] = s;
+          // 目标端列集合必须问目标本身：DDL 清空缓存后，源端 schema 已经是
+          // 新结构，用它初始化会把"目标还没有的新列"误判为已存在。
+          if (target_cols.find(ev.table) == target_cols.end()) {
+            std::vector<std::string> tc;
+            if (tgt->table_columns(ev.table, tc).ok()) {
+              for (const auto& n : tc) target_cols[ev.table].insert(n);
+            } else {
+              for (const auto& c : s.columns) target_cols[ev.table].insert(c.name);
+            }
+          }
           it = schemas.find(ev.table);
         }
       }
       if (it == schemas.end()) continue;
 
+      // 结构漂移：源端在增量期间加/删列时，事件行宽会和缓存 schema 不一致。
+      // 以前这里只会报 "schema/row image column mismatch" 或静默丢行；
+      // 现在重读 schema、按需补 ALTER TABLE，否则明确阻断。
+      if (!ev.is_ddl && !ev.after.empty() &&
+          ev.after.size() != it->second.columns.size()) {
+        TableSchema fresh;
+        Status rs = src->read_schema(ev.table, fresh);
+        // DDL 刚提交时，元数据在个别连接上可能还看不到新列：短暂重读。
+        for (int attempt = 0; rs.ok() &&
+                            fresh.columns.size() != ev.after.size() &&
+                            attempt < 3;
+             ++attempt) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(200 * (attempt + 1)));
+          rs = src->read_schema(ev.table, fresh);
+        }
+        if (!rs.ok()) {
+          m.errors += 1;
+          m.log("[error] schema drift " + ev.table + ": reread failed: " + rs.str());
+          batch_ok = false;
+          break;
+        }
+        if (fresh.columns.size() != ev.after.size()) {
+          std::string names;
+          for (const auto& c : fresh.columns) names += c.name + ",";
+          std::string cached;
+          for (const auto& c : it->second.columns) cached += c.name + ",";
+          m.log("[debug] drift " + ev.table + " fresh=" + std::to_string(fresh.columns.size()) +
+                "[" + names + "] cached=" + std::to_string(it->second.columns.size()) +
+                "[" + cached + "] event=" + std::to_string(ev.after.size()) +
+                " op=" + std::to_string(ev.op) + " src=" + src->describe() +
+                " vals=" + [&] {
+                  std::string v;
+                  for (const auto& x : ev.after) v += x.json() + "|";
+                  return v;
+                }());
+          m.errors += 1;
+          m.log("[error] schema drift " + ev.table + ": event image has " +
+                std::to_string(ev.after.size()) + " columns, source now has " +
+                std::to_string(fresh.columns.size()) +
+                " — the binlog event predates the DDL; wait for the next batch");
+          batch_ok = false;
+          break;
+        }
+        std::vector<ColumnDef> added;
+        for (const auto& c : fresh.columns) {
+          bool known = false;
+          for (const auto& old : it->second.columns)
+            if (old.name == c.name) { known = true; break; }
+          if (!known) added.push_back(c);
+        }
+        if (!added.empty()) {
+          if (!o.cdc_ddl) {
+            m.errors += 1;
+            m.log("[error] schema drift " + ev.table + ": " +
+                  std::to_string(added.size()) +
+                  " new column(s) on source; rerun with --cdc-ddl to apply "
+                  "ALTER TABLE automatically (target schema is stale)");
+            batch_ok = false;
+            break;
+          }
+          for (const auto& c : added) {
+            const std::string type = !c.dst_type.empty() ? c.dst_type : c.src_type;
+            std::string sql;
+            if (o.target_kind == "mysql")
+              sql = "ALTER TABLE `" + ev.table + "` ADD COLUMN `" + c.name + "` " + type;
+            else if (o.target_kind == "pg" || o.target_kind == "og")
+              sql = "ALTER TABLE \"" + ev.table + "\" ADD COLUMN \"" + c.name + "\" " + type;
+            else if (o.target_kind == "mssql")
+              sql = "ALTER TABLE [" + ev.table + "] ADD [" + c.name + "] " + type;
+            else
+              sql = "ALTER TABLE \"" + ev.table + "\" ADD (\"" + c.name + "\" " + type + ")";
+            Status ds = tgt->exec_sql(sql);
+            if (!ds.ok()) {
+              m.errors += 1;
+              m.log("[error] ddl drift " + ev.table + "." + c.name + ": " + ds.str());
+              batch_ok = false;
+              break;
+            }
+            m.log("ddl drift applied: " + ev.table + "." + c.name + " " + type);
+          }
+          if (!batch_ok) break;
+        }
+        for (const auto& c : added) target_cols[ev.table].insert(c.name);
+        schemas[ev.table] = fresh;
+        it = schemas.find(ev.table);
+      }
+
       Status as = apply_event(*tgt, it->second, ev);
+      // 目标端缺列（DDL 事件没被应用/被跳过）时，按源端 schema 补齐后重试一次。
+      if (!as.ok() && o.cdc_ddl &&
+          as.str().find("Unknown column") != std::string::npos) {
+        TableSchema fresh;
+        if (src->read_schema(ev.table, fresh).ok()) {
+          bool added_any = false;
+          for (const auto& c : fresh.columns) {
+            if (target_cols[ev.table].count(c.name)) continue;
+            const std::string type = !c.dst_type.empty() ? c.dst_type : c.src_type;
+            std::string sql;
+            if (o.target_kind == "mysql")
+              sql = "ALTER TABLE `" + ev.table + "` ADD COLUMN `" + c.name + "` " + type;
+            else if (o.target_kind == "pg" || o.target_kind == "og")
+              sql = "ALTER TABLE \"" + ev.table + "\" ADD COLUMN \"" + c.name + "\" " + type;
+            else if (o.target_kind == "mssql")
+              sql = "ALTER TABLE [" + ev.table + "] ADD [" + c.name + "] " + type;
+            else
+              sql = "ALTER TABLE \"" + ev.table + "\" ADD (\"" + c.name + "\" " + type + ")";
+            Status ds = tgt->exec_sql(sql);
+            if (!ds.ok()) {
+              m.errors += 1;
+              m.log("[error] ddl drift " + ev.table + "." + c.name + ": " + ds.str());
+              break;
+            }
+            target_cols[ev.table].insert(c.name);
+            added_any = true;
+            m.log("ddl drift applied: " + ev.table + "." + c.name + " " + type);
+          }
+          if (added_any) {
+            schemas[ev.table] = fresh;
+            it = schemas.find(ev.table);
+            as = apply_event(*tgt, it->second, ev);
+          }
+        }
+      }
       if (!as.ok()) {
         m.errors += 1;
+        batch_ok = false;
         m.log("[error] cdc apply " + ev.table + ": " + as.str());
         if (std::getenv("MIG_CDC_DEBUG"))
           std::fprintf(stderr, "[cdc-err] apply %s: %s\n", ev.table.c_str(),
                        as.str().c_str());
+        break;
       } else {
         m.rows_done += 1;
         ++applied;
       }
     }
 
+    // 批次失败：回滚且不推进位点，重启后从旧位点重放。
+    if (!batch_ok) {
+      tgt->rollback();
+      return Status::Err(Code::kInvalid,
+                         "cdc batch failed; position not advanced");
+    }
     // 变更必须提交，否则进程退出时全部回滚
     Status cs = tgt->commit();
     if (!cs.ok()) {
       m.errors += 1;
       m.log("[error] cdc commit: " + cs.str());
+      return Status::Err(Code::kDb, "cdc commit failed; position not advanced");
     }
 
-    std::ofstream out(o.cdc_position_path, std::ios::trunc);
-    out << reader.file() << ":" << reader.pos();
+    if (!write_text_atomic(o.cdc_position_path,
+                           reader.file() + ":" +
+                               std::to_string(reader.pos()))) {
+      m.log("[warn] cannot persist cdc position");
+    }
     last_file = reader.file();
     last_pos = reader.pos();
     reconnects = 0;
@@ -852,6 +1053,13 @@ Status run_cdc(const Options& o, Metrics& m, int max_events) {
 
   return Status::OK();
 }
+
+#else
+Status run_cdc(const Options&, Metrics&, int) {
+  return Status::Err(Code::kUnsupported,
+                     "MySQL binlog CDC requires the MySQL 8 client library");
+}
+#endif
 
 #ifndef MIG_ENABLE_PG_CDC
 Status run_pg_cdc(const Options&, Metrics&, int) {

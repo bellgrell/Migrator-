@@ -1,0 +1,33 @@
+{
+  "global": {
+    "int": "int",
+    "integer": "int",
+    "bigint": "bigint",
+    "smallint": "smallint",
+    "tinyint": "tinyint",
+    "bit": "tinyint(1)",
+    "decimal": "decimal{args}",
+    "numeric": "decimal{args}",
+    "money": "decimal(19,4)",
+    "smallmoney": "decimal(10,4)",
+    "float": "double",
+    "real": "float",
+    "varchar": "varchar{args}",
+    "nvarchar": "varchar{args}",
+    "char": "char{args}",
+    "nchar": "char{args}",
+    "text": "longtext",
+    "ntext": "longtext",
+    "varbinary": "varbinary{args}",
+    "binary": "binary{args}",
+    "image": "longblob",
+    "date": "date",
+    "datetime": "datetime",
+    "datetime2": "datetime{args}",
+    "smalldatetime": "datetime",
+    "time": "time{args}",
+    "datetimeoffset": "varchar(64)",
+    "uniqueidentifier": "char(36)"
+  },
+  "columns": {}
+}

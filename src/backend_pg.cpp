@@ -8,8 +8,12 @@
 #include <ctime>
 #include <cstring>
 #include <cerrno>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <sys/select.h>
 #include <sys/time.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -165,7 +169,11 @@ bool parse_timestamp_us(const std::string& s, bool date_only, int64_t& out) {
   struct tm tm {};
   tm.tm_year = y - 1900; tm.tm_mon = mo - 1; tm.tm_mday = d;
   tm.tm_hour = h; tm.tm_min = mi; tm.tm_sec = se;
+  #ifdef _WIN32
+  const time_t t = _mkgmtime(&tm);
+#else
   const time_t t = timegm(&tm);
+#endif
   if (t == (time_t)-1) return false;
   if (date_only) {
     out = (int64_t)((t - 946684800LL) / 86400);
@@ -220,7 +228,8 @@ bool encode_binary_value(std::string& out, const Value& v, const ColumnDef& c) {
 class PgTarget : public ITarget, public DbBase {
  public:
   explicit PgTarget(const Options& o)
-      : DbBase(o), use_copy_(o.use_copy && !o.resume), resume_(o.resume),
+      : DbBase(o), use_copy_(o.use_copy && !(o.resume || o.idempotent)),
+        resume_(o.resume || o.idempotent),
         og_requested_(o.opengauss), og_(o.opengauss) {}
   ~PgTarget() override { close(); }
 
@@ -257,6 +266,7 @@ class PgTarget : public ITarget, public DbBase {
     server_is_og_ = PgDialect::is_open_gauss(server_version_);
     // 请求 openGauss 但连到 PG 时，不做 openGauss 特化（describe 会标注）
     if (og_ && !server_is_og_) og_ = false;
+    if (server_is_og_) exec_simple("SET extra_float_digits = 3");
 
     // openGauss 的 numeric 输出默认省略整数位的 0（.17），
     // 打开 display_leading_zero 才和 MySQL/PostgreSQL 的 0.17 一致
@@ -290,6 +300,26 @@ class PgTarget : public ITarget, public DbBase {
     std::lock_guard<std::mutex> lk(mu_);
     written_[s.name] = 0;
     schemas_[s.name] = s;
+    return Status::OK();
+  }
+
+  void enable_idempotent() override { resume_ = true; use_copy_ = false; }
+
+  Status table_columns(const std::string& table,
+                       std::vector<std::string>& out) override {
+    out.clear();
+    const std::string q =
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = '" + table +
+        "' ORDER BY ordinal_position";
+    PGresult* r = PQexec(conn_, q.c_str());
+    if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
+      if (r) PQclear(r);
+      return Status::Err(Code::kDb, std::string("table_columns: ") +
+                                        (conn_ ? PQerrorMessage(conn_) : "no conn"));
+    }
+    for (int i = 0; i < PQntuples(r); ++i) out.push_back(PQgetvalue(r, i, 0));
+    PQclear(r);
     return Status::OK();
   }
 

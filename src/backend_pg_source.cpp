@@ -99,6 +99,7 @@ class PgSource : public ISource, public DbBase {
       server_version_ = PQgetvalue(vr, 0, 0);
     if (vr) PQclear(vr);
     server_is_og_ = PgDialect::is_open_gauss(server_version_);
+    if (server_is_og_) exec("SET extra_float_digits = 3");
     // 与目标端一致：numeric 输出带前导 0，避免 checksum 假阳性
     const std::string compat = PgDialect::compat_sql(server_is_og_);
     if (!compat.empty()) exec(compat);

@@ -43,6 +43,30 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+## Security and operations
+
+The built-in dashboard is fail-closed:
+
+* a loopback bind (default `127.0.0.1`) works without authentication;
+* a non-loopback bind requires `--http-token-file`/`--http-token` **and**
+  `--tls-cert`/`--tls-key`, unless `--http-allow-insecure` is passed;
+* every request is appended to a JSONL audit log (`--http-audit`,
+  default `out/audit.log`);
+* a failed-auth throttle (20/IP/60s) protects the token endpoint;
+* `--instance-lock <path>` refuses a second writer sharing a state directory.
+
+TLS requires a build with OpenSSL (detected automatically by `make` and
+CMake). See [docs/operations.md](docs/operations.md) for token rotation, the
+active/passive HA model, packaging (systemd, launchd, Docker) and the
+deployment runbook.
+
+Type rules can be externalized as JSON and checked in CI:
+
+```bash
+./build/migrator --export-type-rules config/type_rules.json
+./build/migrator --prove-type-rules --type-rules config/type_rules.json
+```
+
 ## Modules
 
 Optional modules are compiled in by default and can be disabled at build time:

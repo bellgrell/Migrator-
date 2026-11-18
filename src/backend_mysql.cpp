@@ -3,10 +3,13 @@
 
 #include <mysql/mysql.h>
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
+#include "checksum_normalizer.h"
 #include "dsn_secret.h"
 
 namespace mig {
@@ -16,6 +19,11 @@ const char kBt = (char)96;  // MySQL 标识符引号
 
 // MySQL 的 DATETIME(6) 会输出 ".000000" / ".120000"，PG 会省略零小数部分，
 // 校验前统一裁掉末尾的 0，避免 checksum 假阳性
+std::string lower_ascii_local(std::string s) {
+  for (char& c : s) c = (char)std::tolower((unsigned char)c);
+  return s;
+}
+
 std::string trim_fraction(std::string s) {
   const size_t dot = s.find('.');
   if (dot == std::string::npos) return s;
@@ -51,7 +59,7 @@ class MySqlSource : public ISource, public DbBase {
     mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &ct);
     mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &ct);
-#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000 && !defined(MARIADB_VERSION_ID)
     unsigned int sm = SSL_MODE_PREFERRED;
     if (opts_.mysql_ssl_mode == "DISABLED") sm = SSL_MODE_DISABLED;
     else if (opts_.mysql_ssl_mode == "REQUIRED") sm = SSL_MODE_REQUIRED;
@@ -94,12 +102,32 @@ class MySqlSource : public ISource, public DbBase {
   Status read_schema(const std::string& table, TableSchema& out) override {
     out = TableSchema();
     out.name = table;
+    // 长事务/一致性快照会冻结数据字典视图；读元数据前先结束当前事务，
+    // 否则 DDL 之后仍然看到旧的列集合（增量漂移检测会误判）。
+    mysql_query(conn_, "COMMIT");
+    // 连接上若残留未消费的结果集，mysql_store_result 会返回上一个结果，
+    // 表现为“读到的仍是旧的列集合”。先排空。
+    while (mysql_next_result(conn_) == 0) {
+      if (MYSQL_RES* stale = mysql_store_result(conn_)) mysql_free_result(stale);
+    }
+    if (std::getenv("MIG_SCHEMA_DEBUG")) {
+      if (mysql_query(conn_, "SELECT DATABASE(), CONNECTION_ID()") == 0) {
+        if (MYSQL_RES* rr = mysql_store_result(conn_)) {
+          MYSQL_ROW row = mysql_fetch_row(rr);
+          std::fprintf(stderr, "[schema-dbg] table=%s db=%s conn=%s\n",
+                       table.c_str(), row && row[0] ? row[0] : "(null)",
+                       row && row[1] ? row[1] : "?");
+          mysql_free_result(rr);
+        }
+      }
+    }
 
-    const std::string q =
-        "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA "
-        "FROM information_schema.COLUMNS "
-        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + esc(table) + "' "
-        "ORDER BY ORDINAL_POSITION";
+    // SHOW COLUMNS 直接走数据字典；在某些长连接上 information_schema.COLUMNS
+    // 会返回旧定义（DDL 之后仍是旧列集合），SHOW COLUMNS 不会。
+    std::string q = "SHOW COLUMNS FROM ";
+    q += (char)96;
+    q += table;
+    q += (char)96;
 
     if (mysql_query(conn_, q.c_str())) return err("read_schema");
     MYSQL_RES* r = mysql_store_result(conn_);
@@ -112,7 +140,7 @@ class MySqlSource : public ISource, public DbBase {
       c.src_type = row[1] ? row[1] : "";
       c.nullable = !(row[2] && std::strcmp(row[2], "NO") == 0);
       c.primary = row[3] && std::strcmp(row[3], "PRI") == 0;
-      c.auto_increment = row[4] && std::strstr(row[4], "auto_increment") != nullptr;
+      c.auto_increment = row[5] && std::strstr(row[5], "auto_increment") != nullptr;
       if (c.src_type.find("blob") != std::string::npos ||
           c.src_type.find("binary") != std::string::npos) {
         c.binary = true;
@@ -123,6 +151,24 @@ class MySqlSource : public ISource, public DbBase {
     mysql_free_result(r);
     if (out.columns.empty())
       return Status::Err(Code::kNotFound, "table not found: " + table);
+
+    // MySQL's text protocol prints FLOAT with only 6 significant digits
+    // (e.g. 100.3332977 -> "100.333").  Widen FLOAT columns server-side so the
+    // exact binary32 value round-trips into the target.
+    std::string select_expr;
+    for (size_t i = 0; i < out.columns.size(); ++i) {
+      if (i) select_expr += ", ";
+      const std::string t = lower_ascii_local(out.columns[i].src_type);
+      const std::string q =
+          std::string(1, kBt) + out.columns[i].name + kBt;
+      if (t == "float" || t.rfind("float(", 0) == 0 ||
+          t.rfind("float unsigned", 0) == 0) {
+        select_expr += "CAST(" + q + " AS DOUBLE) AS " + q;
+      } else {
+        select_expr += q;
+      }
+    }
+    select_expr_[table] = select_expr;
 
     const std::string qi =
         "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX "
@@ -155,7 +201,7 @@ class MySqlSource : public ISource, public DbBase {
 
   Status open_cursor(const std::string& table) override {
     close_cursor();
-    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt;
+    const std::string q = "SELECT " + select_list(table) + " FROM " + kBt + table + kBt;
     if (mysql_query(conn_, q.c_str())) return err("SELECT " + table);
     res_ = mysql_use_result(conn_);
     if (!res_) return err("use_result");
@@ -167,7 +213,7 @@ class MySqlSource : public ISource, public DbBase {
   Status open_cursor_ordered(const std::string& table,
                              const std::string& column) override {
     close_cursor();
-    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+    const std::string q = "SELECT " + select_list(table) + " FROM " + kBt + table + kBt +
                           " ORDER BY " + kBt + column + kBt;
     if (mysql_query(conn_, q.c_str())) return err("SELECT ordered " + table);
     res_ = mysql_use_result(conn_);
@@ -180,7 +226,7 @@ class MySqlSource : public ISource, public DbBase {
   Status open_cursor_from(const std::string& table, const std::string& column,
                           const std::string& after_literal) override {
     close_cursor();
-    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+    const std::string q = "SELECT " + select_list(table) + " FROM " + kBt + table + kBt +
                           " WHERE " + kBt + column + kBt + " > " +
                           after_literal + " ORDER BY " + kBt + column + kBt;
     if (mysql_query(conn_, q.c_str())) return err("SELECT resume " + table);
@@ -238,7 +284,7 @@ class MySqlSource : public ISource, public DbBase {
   Status open_cursor_range(const std::string& table, const std::string& column,
                            int64_t lo, int64_t hi) override {
     close_cursor();
-    const std::string q = std::string("SELECT * FROM ") + kBt + table + kBt +
+    const std::string q = "SELECT " + select_list(table) + " FROM " + kBt + table + kBt +
                           " WHERE " + kBt + column + kBt + " >= " +
                           std::to_string(lo) + " AND " + kBt + column + kBt +
                           " <= " + std::to_string(hi) + " ORDER BY " + kBt +
@@ -276,6 +322,22 @@ class MySqlSource : public ISource, public DbBase {
           case MYSQL_TYPE_FLOAT:
           case MYSQL_TYPE_DOUBLE:
             r.push_back(Value::Dbl(std::strtod(p, nullptr)));
+            break;
+          case MYSQL_TYPE_BIT:
+            r.push_back(Value::Bytes(std::string(p, len)));
+            break;
+          case MYSQL_TYPE_DECIMAL:
+          case MYSQL_TYPE_NEWDECIMAL:
+            r.push_back(Value::Dec(std::string(p, len)));
+            break;
+          case MYSQL_TYPE_VAR_STRING:
+          case MYSQL_TYPE_STRING:
+            // VARCHAR/CHAR and VARBINARY/BINARY share these field types.
+            // Charset 63 means binary, so keep the raw bytes out of SQL text.
+            if (fields_[i].charsetnr == 63)
+              r.push_back(Value::Bytes(std::string(p, len)));
+            else
+              r.push_back(Value::Str(std::string(p, len)));
             break;
           case MYSQL_TYPE_TINY_BLOB:
           case MYSQL_TYPE_MEDIUM_BLOB:
@@ -358,6 +420,42 @@ class MySqlSource : public ISource, public DbBase {
   }
 
  private:
+  std::string select_list(const std::string& table) {
+    const auto it = select_expr_.find(table);
+    if (it != select_expr_.end()) return it->second;
+
+    // Worker connections are created without read_schema(); discover FLOAT
+    // columns lazily so the CAST-to-DOUBLE rule still applies.
+    std::string expr = "*";
+    const std::string q =
+        "SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" +
+        esc(table) + "' ORDER BY ORDINAL_POSITION";
+    if (mysql_query(conn_, q.c_str()) == 0) {
+      MYSQL_RES* r = mysql_store_result(conn_);
+      if (r) {
+        std::string built;
+        MYSQL_ROW row;
+        while ((row = mysql_fetch_row(r)) != nullptr) {
+          if (!row[0] || !row[1]) continue;
+          if (!built.empty()) built += ", ";
+          const std::string qn = std::string(1, kBt) + row[0] + kBt;
+          const std::string t = lower_ascii_local(row[1]);
+          if (t == "float" || t.rfind("float(", 0) == 0 ||
+              t.rfind("float unsigned", 0) == 0) {
+            built += "CAST(" + qn + " AS DOUBLE) AS " + qn;
+          } else {
+            built += qn;
+          }
+        }
+        mysql_free_result(r);
+        if (!built.empty()) expr = built;
+      }
+    }
+    select_expr_[table] = expr;
+    return expr;
+  }
+
   Status err(const std::string& what) {
     return Status::Err(Code::kDb, what + ": " + (conn_ ? mysql_error(conn_) : "no conn"));
   }
@@ -376,6 +474,7 @@ class MySqlSource : public ISource, public DbBase {
 
   MYSQL* conn_ = nullptr;
   MYSQL_RES* res_ = nullptr;
+  std::map<std::string, std::string> select_expr_;
   MYSQL_FIELD* fields_ = nullptr;
   unsigned int nfields_ = 0;
 };

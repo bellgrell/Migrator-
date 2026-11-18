@@ -43,6 +43,29 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+## 安全与运维
+
+内置面板默认 fail-closed：
+
+* 回环绑定（默认 `127.0.0.1`）可以不开认证；
+* 非回环绑定必须同时提供 `--http-token-file`/`--http-token` 与
+  `--tls-cert`/`--tls-key`，否则拒绝启动（除非显式
+  `--http-allow-insecure`）；
+* 每个请求写入 JSONL 审计日志（`--http-audit`，默认 `out/audit.log`）；
+* 失败认证限流（每 IP 60 秒 20 次）；
+* `--instance-lock <path>` 阻止两个写进程共用同一状态目录。
+
+TLS 需要带 OpenSSL 的构建（`make`/CMake 会自动探测）。令牌轮换、主备 HA、
+systemd/launchd/Docker 打包与上线步骤见
+[docs/operations.md](docs/operations.md)。
+
+类型规则可外置为 JSON 并在 CI 中检查：
+
+```bash
+./build/migrator --export-type-rules config/type_rules.json
+./build/migrator --prove-type-rules --type-rules config/type_rules.json
+```
+
 ## 模块
 
 可选模块默认编译进来，也可以在构建时关闭：

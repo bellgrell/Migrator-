@@ -301,8 +301,7 @@ bool query_ok(PGconn* c, const std::string& sql, PGresult** out = nullptr) {
 }
 
 void save_position(const Options& o, const std::string& lsn) {
-  std::ofstream out(o.pg_cdc_position_path, std::ios::trunc);
-  if (out) out << lsn;
+  write_text_atomic(o.pg_cdc_position_path, lsn);
 }
 
 }  // namespace

@@ -19,7 +19,17 @@
     "bytea": "bytea",
     "json": "jsonb",
     "jsonb": "jsonb",
-    "uuid": "uuid"
+    "uuid": "uuid",
+    "bit": "bit{args}",
+    "bit varying": "varbit{args}",
+    "inet": "inet",
+    "cidr": "cidr",
+    "macaddr": "macaddr",
+    "macaddr8": "macaddr8",
+    "interval": "interval",
+    "xml": "xml",
+    "money": "numeric(19,2)",
+    "oid": "bigint"
   },
   "columns": {}
 }

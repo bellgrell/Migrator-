@@ -14,8 +14,20 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "backends.h"
+#include "checksum_normalizer.h"
+#include "platform.h"
 #include "io_scheduler.h"
+#include "mmv_verify.h"
+#include "type_system.h"
 #include "job_scheduler.h"
 
 namespace mig {
@@ -175,6 +187,25 @@ Status reconnect_source(ISource& src, const Options& o, Metrics& m,
   return st;
 }
 
+Status drop_target_table(ITarget& tgt, const Options& o, const std::string& table,
+                           Metrics& m) {
+  // End any open transaction before DDL; an idle-in-transaction connection is
+  // exactly what makes DROP TABLE wait behind autovacuum.
+  tgt.commit();
+  if (o.target_kind == "pg" || o.target_kind == "og")
+    tgt.exec_sql("SET lock_timeout = '5s'");
+  else if (o.target_kind == "mysql")
+    tgt.exec_sql("SET SESSION lock_wait_timeout = 5");
+  Status st = tgt.drop_table(table);
+  for (int attempt = 0; !st.ok() && attempt < 3; ++attempt) {
+    m.log("[warn] drop_table " + table + " blocked: " + st.str() + "; retry " +
+          std::to_string(attempt + 1) + "/3");
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    st = tgt.drop_table(table);
+  }
+  return st;
+}
+
 bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tgt,
                 Metrics& m) {
   auto tmet = find_metric(m, job.name);
@@ -194,7 +225,7 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
     }
   }
   if (o.truncate_target) {
-    Status ds = tgt.drop_table(job.name);
+    Status ds = drop_target_table(tgt, o, job.name, m);
     if (!ds.ok()) m.log("[warn] drop_table " + job.name + ": " + ds.str());
   }
   if (o.resume && !pk) {
@@ -268,6 +299,15 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
 
     st = tgt.write_batch(job.name, rows);
     if (!st.ok()) {
+      // 批次失败可能是“部分写入 + 断连”。回滚当前事务后切成幂等模式重试一次，
+      // 避免重放时主键冲突，也避免把半批次算进 rows_done。
+      m.log("[warn] write " + job.name + ": " + st.str() +
+            "; rollback and retry idempotently");
+      tgt.rollback();
+      tgt.enable_idempotent();
+      st = tgt.write_batch(job.name, rows);
+    }
+    if (!st.ok()) {
       m.log("[error] write " + job.name + ": " + st.str());
       tmet->errors += 1;
       m.errors += 1;
@@ -319,7 +359,13 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
   }
 
   Status final_cs = tgt.commit();
-  if (final_cs.ok() && o.resume && pk_idx >= 0)
+  if (!final_cs.ok()) {
+    m.log("[error] final commit " + job.name + ": " + final_cs.str());
+    tmet->errors += 1;
+    m.errors += 1;
+    failed = true;
+  }
+  if (!failed && final_cs.ok() && o.resume && pk_idx >= 0)
     write_checkpoint(o, job.name, pending_pk);
   src.close_cursor();
 
@@ -376,7 +422,7 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   m.log("DDL for " + job.name + ":\n" + job.ddl);
 
   if (o.truncate_target) {
-    Status ds = tgt.drop_table(job.name);
+    Status ds = drop_target_table(tgt, o, job.name, m);
     if (!ds.ok()) m.log("[warn] drop_table " + job.name + ": " + ds.str());
   }
   Status st = tgt.create_table(job.schema, job.ddl);
@@ -827,11 +873,21 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
   // ANALYZE：更新统计信息，避免复杂查询走坏执行计划
   if (o.analyze_after && !jobs.empty()) {
     m.phase = "analyzing";
+    // Persist COPY/DDL before ANALYZE. If ANALYZE fails inside the same
+    // transaction, PostgreSQL aborts it and the final COMMIT would silently
+    // roll back the table we just loaded.
+    tgt.commit();
     int okc = 0;
     for (const auto& job : jobs) {
       Status as = tgt.exec_sql(tgt.analyze_sql(job.name));
-      if (as.ok()) ++okc;
+      if (as.ok()) {
+        ++okc;
+      } else {
+        m.log("[warn] analyze " + job.name + ": " + as.str());
+        tgt.rollback();
+      }
     }
+    tgt.commit();
     m.log("analyze done: " + std::to_string(okc) + "/" +
           std::to_string(jobs.size()) + " tables");
   }
@@ -882,6 +938,227 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
   return Status::OK();
 }
 
+int acquire_verify_lock(const std::string& path, bool wait, std::string& err) {
+#ifndef _WIN32
+  const int fd = open(path.c_str(), O_CREAT | O_RDWR, 0644);
+  if (fd < 0) {
+    err = "cannot open verify lock: " + path;
+    return -1;
+  }
+  int rc = flock(fd, LOCK_EX | LOCK_NB);
+  for (int i = 0; rc != 0 && wait && i < 60; ++i) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    rc = flock(fd, LOCK_EX | LOCK_NB);
+  }
+  if (rc != 0) {
+    err = "another migration/verification is running (lock: " + path + ")";
+    close(fd);
+    return -1;
+  }
+  return fd;
+#else
+  (void)wait;
+  static mig::InstanceLock win_verify_lock;
+  if (!win_verify_lock.acquire(path, err)) return -1;
+  return 0;
+#endif
+}
+
+void write_verify_status(const std::string& path, const std::string& state,
+                         int64_t pid, int code, const std::string& error,
+                         const std::string& tables) {
+  const std::string tmp = path + ".tmp";
+  std::ofstream f(tmp, std::ios::trunc);
+  if (!f) return;
+  f << "state=" << state << "\n";
+  f << "pid=" << (long long)pid << "\n";
+  f << "exit_code=" << code << "\n";
+  f << "tables=" << tables << "\n";
+  std::string clean;
+  for (char c : error) clean += (c == '\n' || c == '\r') ? ' ' : c;
+  f << "error=" << clean << "\n";
+  f.close();
+  std::error_code ec;
+  std::filesystem::rename(tmp, path, ec);
+}
+
+Status spawn_async_verify(const Options& o, Metrics& m, int lock_fd) {
+  std::vector<std::string> tables;
+  {
+    std::lock_guard<std::mutex> lk(m.mu);
+    for (const auto& t : m.tables) {
+      if (t && t->total > 0) tables.push_back(t->name);
+    }
+  }
+  if (tables.empty()) return Status::Err(Code::kInvalid, "no tables to verify");
+  std::string list;
+  for (size_t i = 0; i < tables.size(); ++i) {
+    if (i) list += ",";
+    list += tables[i];
+  }
+  const std::string stamp = std::to_string((long long)std::time(nullptr));
+  const std::string log = o.out_dir + "/verify-async-" + stamp + ".log";
+  const std::string status = o.out_dir + "/verify-async-" + stamp + ".status";
+  write_verify_status(status, "running", 0, -1, "", list);
+  std::vector<std::string> args = {
+      o.exe_path.empty() ? std::string("migrator") : o.exe_path,
+      "--mode", o.mode,
+      "--source", o.source,
+      "--target", o.target,
+      "--verify-only", "--verify-engine", "mmv", "--exit",
+      "--only-tables", list,
+      "--verify-status-file", status,
+      "--connect-timeout", std::to_string(o.connect_timeout),
+      "--connect-retries", std::to_string(o.connect_retries)};
+
+#ifdef _WIN32
+  std::string cmdline;
+  const char q = '"';
+  for (const auto& a : args) {
+    if (!cmdline.empty()) cmdline += " ";
+    cmdline += q;
+    cmdline += a;
+    cmdline += q;
+  }
+  SECURITY_ATTRIBUTES sa{};
+  sa.nLength = sizeof(sa);
+  sa.bInheritHandle = TRUE;
+  HANDLE hlog = CreateFileA(log.c_str(), FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  STARTUPINFOA si{};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdOutput = hlog;
+  si.hStdError = hlog;
+  si.hStdInput = nullptr;
+  PROCESS_INFORMATION pi{};
+  std::vector<char> cmd(cmdline.begin(), cmdline.end());
+  cmd.push_back(0);
+  const BOOL started =
+      CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                     DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr,
+                     nullptr, &si, &pi);
+  if (hlog != INVALID_HANDLE_VALUE) CloseHandle(hlog);
+  if (!started) {
+    return Status::Err(Code::kIO,
+                       "CreateProcess failed: " +
+                           std::to_string((unsigned long)GetLastError()));
+  }
+  write_verify_status(status, "running", (int64_t)pi.dwProcessId, -1, "", list);
+  m.log("[verify] async started pid=" +
+        std::to_string((unsigned long)pi.dwProcessId) + " log=" + log +
+        " status=" + status);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return Status::OK();
+#else
+  const pid_t pid = fork();
+  if (pid < 0) return Status::Err(Code::kIO, "fork failed");
+  if (pid == 0) {
+    setsid();
+    const int fd = open(log.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+    if (fd >= 0) {
+      dup2(fd, STDOUT_FILENO);
+      dup2(fd, STDERR_FILENO);
+      if (fd > 2) close(fd);
+    }
+    std::vector<char*> av;
+    av.reserve(args.size() + 1);
+    for (auto& s : args) av.push_back(const_cast<char*>(s.c_str()));
+    av.push_back(nullptr);
+    execv(av[0], av.data());
+    _exit(127);
+  }
+  if (lock_fd >= 0) close(lock_fd);  // child inherited the flock
+  m.log("[verify] async started pid=" + std::to_string((long long)pid) +
+        " log=" + log + " status=" + status);
+  return Status::OK();
+#endif
+}
+
+std::string printable_value(const Value& v) {
+  if (v.type == ValType::kString) return v.s;
+  if (v.type == ValType::kBytes) {
+    static const char* hex = "0123456789abcdef";
+    std::string o = "0x";
+    for (unsigned char c : v.s) {
+      o += hex[c >> 4];
+      o += hex[c & 0xF];
+    }
+    return o;
+  }
+  if (v.type == ValType::kNull) return "NULL";
+  return v.json();
+}
+
+// 校验和不一致时按主键逐行列定位：给出表、键、列、两侧取值，
+// 并写入 mmv_table_mismatches，repair 可以直接复用。
+void localize_checksum_diff(ISource& a, ISource& b, const TableSchema& s,
+                            Metrics& m) {
+  if (s.primary_key.size() != 1) {
+    m.log("[mismatch] " + s.name +
+          ": no single primary key, column localization skipped");
+    return;
+  }
+  const std::string pk = s.primary_key[0];
+  int pk_idx = -1;
+  for (size_t i = 0; i < s.columns.size(); ++i)
+    if (s.columns[i].name == pk) { pk_idx = (int)i; break; }
+  if (pk_idx < 0) return;
+
+  Status sa = a.open_cursor_ordered(s.name, pk);
+  Status sb = b.open_cursor_ordered(s.name, pk);
+  if (!sa.ok() || !sb.ok()) {
+    m.log("[mismatch] " + s.name + ": localization failed: " +
+          (sa.ok() ? sb.str() : sa.str()));
+    return;
+  }
+
+  const int kMax = 20;
+  int shown = 0;
+  while (shown < kMax) {
+    std::vector<Row> ra, rb;
+    Status fa = a.fetch_batch(1000, ra);
+    Status fb = b.fetch_batch(1000, rb);
+    if (!fa.ok() || !fb.ok()) break;
+    if (ra.empty() || rb.empty()) break;
+    const size_t n = std::min(ra.size(), rb.size());
+    for (size_t i = 0; i < n && shown < kMax; ++i) {
+      const std::string ka = printable_value(ra[i][(size_t)pk_idx]);
+      const std::string kb = printable_value(rb[i][(size_t)pk_idx]);
+      if (ka != kb) {
+        m.log("[mismatch] " + s.name + ": key skew src=" + ka + " dst=" + kb);
+        shown = kMax;
+        break;
+      }
+      for (size_t j = 0; j < s.columns.size() && shown < kMax; ++j) {
+        if (normalize_value(ra[i][j]) == normalize_value(rb[i][j])) continue;
+        const std::string ca = printable_value(ra[i][j]);
+        const std::string cb = printable_value(rb[i][j]);
+        m.log("[mismatch] " + s.name + " key=" + ka + " column=" +
+              s.columns[j].name +
+              " src=" + (ca.size() > 60 ? ca.substr(0, 60) + "..." : ca) +
+              " dst=" + (cb.size() > 60 ? cb.substr(0, 60) + "..." : cb));
+        {
+          std::lock_guard<std::mutex> lk(m.mu);
+          RepairMismatch rm;
+          rm.kind = "value";
+          rm.key = ka;
+          rm.column = s.columns[j].name;
+          rm.source_value = ca;
+          rm.target_value = cb;
+          m.mmv_table_mismatches[s.name].push_back(std::move(rm));
+        }
+        ++shown;
+      }
+    }
+    if (ra.size() < 1000 || rb.size() < 1000) break;
+  }
+  a.close_cursor();
+  b.close_cursor();
+}
+
 Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   m.verifying = true;
   m.phase = "verifying";
@@ -892,6 +1169,7 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     std::lock_guard<std::mutex> lk(m.mu);
     snapshot = m.tables;
   }
+  const bool verify_only = snapshot.empty();
 
   // --verify-only：没有迁移记录时自行枚举源表
   if (snapshot.empty()) {
@@ -926,11 +1204,45 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     }
   }
 
+  // verify-only has no migration metrics: count target rows through a verifier
+  // source instead of tgt.written().
+  std::shared_ptr<ISource> count_dst;
+  if (verify_only && o.target_kind != "sim") {
+    Status cst;
+    if (o.target_kind == "mysql") {
+      Options vo = o;
+      vo.mysql_source_dsn = o.target;
+      count_dst = make_mysql_source(vo, cst);
+#ifdef HAVE_ODBC
+    } else if (o.target_kind == "mssql" || o.target_kind == "oracle") {
+      Options vo = o;
+      vo.source_kind = o.target_kind;
+      vo.source = o.target;
+      count_dst = make_odbc_source(vo, cst);
+#endif
+    } else {
+      Options vo = o;
+      vo.pg_source_uses_source = false;
+      count_dst = make_pg_source(vo, cst);
+    }
+    if (count_dst && !count_dst->connect().ok()) count_dst.reset();
+  }
+
   int64_t mismatch = 0;
   for (auto& t : snapshot) {
     if (t->total == 0) continue;  // rebuild / skip 表不参与行数校验
     const int64_t a = src.total_rows(t->name);
-    const int64_t b = tgt.written(t->name);
+    int64_t b = 0;
+    if (verify_only) {
+      if (!count_dst) {
+        ++mismatch;
+        m.log("[error] verify-only: cannot open target verifier");
+        continue;
+      }
+      b = count_dst->total_rows(t->name);
+    } else {
+      b = tgt.written(t->name);
+    }
     if (a != b) {
       ++mismatch;
       m.log("[mismatch] " + t->name + " source=" + fmt_int(a) + " target=" + fmt_int(b));
@@ -940,13 +1252,89 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   }
 
   // ---- checksum：内容级校验 ----
-  if (o.checksum && o.target_kind != "sim") {
+  if (o.checksum && o.target_kind != "sim" && o.verify_engine == "mmv") {
+    m.log("mmv verify: chunked digest + localization");
+    std::vector<std::string> mmv_tables;
+    for (auto& t : snapshot) {
+      if (t->total != 0) mmv_tables.push_back(t->name);
+    }
+    std::vector<MmvColumnOverride> overrides;
+    {
+      RuleSet type_rules;
+      if (!o.type_rules_path.empty()) {
+        std::string err;
+        if (!type_rules.load_tsv(o.type_rules_path, err))
+          m.log("[warn] type rules: " + err);
+      }
+      const std::string sd = (o.source_kind == "og") ? "pg" : o.source_kind;
+      const std::string td = (o.target_kind == "og") ? "pg" : o.target_kind;
+      for (const auto& table : mmv_tables) {
+        TableSchema ts;
+        if (!src.read_schema(table, ts).ok()) continue;
+        for (const auto& c : ts.columns) {
+          const auto rr = type_rules.resolve(sd, c.src_type, td);
+          if (!rr.ok) continue;
+          MmvColumnOverride ov;
+          ov.table = table;
+          ov.column = c.name;
+          ov.family = RuleSet::family_name(rr.dst.family);
+          ov.digest_bytes = rr.dst.family == TypeFamily::kBytes ||
+                            rr.dst.family == TypeFamily::kBit ||
+                            rr.dst.family == TypeFamily::kGeometry;
+          ov.target = false;
+          overrides.push_back(ov);
+          ov.target = true;
+          overrides.push_back(ov);
+        }
+      }
+    }
+    const MmvVerifyResult vr = run_mmv_verify(o, mmv_tables, overrides);
+    {
+      std::lock_guard<std::mutex> lk(m.mu);
+      m.mmv_verified = true;
+      m.mmv_mismatches = vr.mismatches;
+      m.mmv_failed_tables.clear();
+      m.mmv_table_mismatches.clear();
+      for (const auto& tr : vr.tables) {
+        if (!tr.ok) m.mmv_failed_tables.push_back(tr.table);
+        for (const auto& mm : tr.diffs) {
+          RepairMismatch rm;
+          rm.kind = mm.kind;
+          rm.key = mm.key;
+          rm.column = mm.column;
+          rm.source_value = mm.source_value;
+          rm.target_value = mm.target_value;
+          rm.key_values = mm.key_values;
+          m.mmv_table_mismatches[tr.table].push_back(std::move(rm));
+        }
+      }
+    }
+    for (const auto& tr : vr.tables) {
+      if (tr.ok) {
+        m.log("mmv ok " + tr.table);
+      } else {
+        ++mismatch;
+        m.log("[mismatch] mmv " + tr.table + ": " + tr.detail);
+      }
+    }
+    if (vr.tables.empty() && !vr.ok) {
+      ++mismatch;
+      m.log("[error] mmv: " + vr.detail);
+    }
+  } else if (o.checksum && o.target_kind != "sim") {
     Status st;
     std::shared_ptr<ISource> dst;
     if (o.target_kind == "mysql") {
       Options vo = o;
       vo.mysql_source_dsn = o.target;
       dst = make_mysql_source(vo, st);
+#ifdef HAVE_ODBC
+    } else if (o.target_kind == "mssql" || o.target_kind == "oracle") {
+      Options vo = o;
+      vo.source_kind = o.target_kind;
+      vo.source = o.target;
+      dst = make_odbc_source(vo, st);
+#endif
     } else {
       Options vo = o;
       vo.pg_source_uses_source = false;
@@ -996,6 +1384,7 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
                 " src(rows=" + fmt_int(a.rows) + ",sum=" + std::to_string(a.sum) +
                 ",xor=" + std::to_string(a.xr) + ") dst(rows=" + fmt_int(b.rows) +
                 ",sum=" + std::to_string(b.sum) + ",xor=" + std::to_string(b.xr) + ")");
+          localize_checksum_diff(src, *dst, schema, m);
         }
       }
       dst.reset();
@@ -1007,9 +1396,79 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
   m.verified = true;
   m.phase = mismatch == 0 ? "verified" : "verify_failed";
   m.log(mismatch == 0 ? "verify PASSED" : "verify FAILED");
-  return mismatch == 0 ? Status::OK()
-                       : Status::Err(Code::kInvalid, "row count mismatch");
+  if (mismatch == 0) return Status::OK();
+  return Status::Err(Code::kInvalid,
+                     "verification failed: " + std::to_string(mismatch) +
+                         " table(s) differ (see verify log)");
 }
+
+namespace {
+
+std::string hex_lower(const std::string& s) {
+  static const char* d = "0123456789abcdef";
+  std::string o;
+  o.reserve(s.size() * 2);
+  for (unsigned char c : s) {
+    o.push_back(d[c >> 4]);
+    o.push_back(d[c & 0xF]);
+  }
+  return o;
+}
+
+std::string encode_key_values(const std::vector<std::string>& vals) {
+  std::string o;
+  for (const auto& s : vals) o += std::to_string(s.size()) + ":" + s + "|";
+  return o;
+}
+
+std::string repair_key_text(const Row& r, const std::vector<int>& idx) {
+  std::vector<std::string> vals;
+  vals.reserve(idx.size());
+  for (int i : idx) {
+    if ((size_t)i >= r.size()) {
+      vals.emplace_back();
+      continue;
+    }
+    const Value& v = r[(size_t)i];
+    if (v.type == ValType::kNull) vals.emplace_back();
+    else if (v.type == ValType::kInt) vals.push_back(std::to_string((long long)v.i));
+    else if (v.type == ValType::kBool) vals.push_back(v.b ? "1" : "0");
+    else if (v.type == ValType::kBytes) vals.push_back(hex_lower(v.s));
+    else vals.push_back(v.s);
+  }
+  return encode_key_values(vals);
+}
+
+bool row_values_equal(const Row& a, const Row& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    const Value& x = a[i];
+    const Value& y = b[i];
+    if (x.type != y.type) {
+      if (x.sql_literal() != y.sql_literal()) return false;
+      continue;
+    }
+    switch (x.type) {
+      case ValType::kNull:
+        break;
+      case ValType::kInt:
+        if (x.i != y.i) return false;
+        break;
+      case ValType::kDouble:
+        if (x.d != y.d) return false;
+        break;
+      case ValType::kBool:
+        if (x.b != y.b) return false;
+        break;
+      default:
+        if (x.s != y.s) return false;
+        break;
+    }
+  }
+  return true;
+}
+
+}  // namespace
 
 Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
 #ifndef MIG_ENABLE_REPAIR
@@ -1023,6 +1482,13 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     Options vo = o;
     vo.mysql_source_dsn = o.target;
     dst = make_mysql_source(vo, st);
+#ifdef HAVE_ODBC
+  } else if (o.target_kind == "mssql" || o.target_kind == "oracle") {
+    Options vo = o;
+    vo.source_kind = o.target_kind;
+    vo.source = o.target;
+    dst = make_odbc_source(vo, st);
+#endif
   } else {
     Options vo = o;
     vo.pg_source_uses_source = false;
@@ -1062,28 +1528,53 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         snapshot.end());
   }
 
+  // mmv already told us which tables differ; do not rescan healthy tables.
+  if (o.verify_engine == "mmv" && m.mmv_verified.load()) {
+    std::vector<std::string> failed;
+    {
+      std::lock_guard<std::mutex> lk(m.mu);
+      failed = m.mmv_failed_tables;
+    }
+    if (failed.empty()) {
+      m.log("repair: mmv found no mismatches; nothing to repair");
+      return Status::OK();
+    }
+    std::unordered_set<std::string> want(failed.begin(), failed.end());
+    snapshot.erase(
+        std::remove_if(snapshot.begin(), snapshot.end(),
+                       [&](const std::shared_ptr<TableMetric>& t) {
+                         return want.count(t->name) == 0;
+                       }),
+        snapshot.end());
+    m.log("repair: mmv targeted " + std::to_string(snapshot.size()) +
+          " table(s), " + std::to_string(m.mmv_mismatches.load()) + " mismatch(es)");
+  }
+
   int repaired = 0;
   for (auto& t : snapshot) {
     if (!t || t->total <= 0) continue;
     TableSchema s;
     if (!src.read_schema(t->name, s).ok()) continue;
-    const ColumnDef* pk = single_pk(s);
-    if (!pk) {
-      m.log("[repair] skip " + t->name + ": no single primary key");
+    if (s.primary_key.empty()) {
+      m.log("[repair] skip " + t->name + ": no primary key");
       continue;
     }
     int pk_idx = -1;
-    for (size_t i = 0; i < s.columns.size(); ++i)
-      if (s.columns[i].name == pk->name) { pk_idx = (int)i; break; }
-    if (pk_idx < 0) continue;
+    if (s.primary_key.size() == 1) {
+      for (size_t i = 0; i < s.columns.size(); ++i)
+        if (s.columns[i].name == s.primary_key[0]) { pk_idx = (int)i; break; }
+      if (pk_idx < 0) continue;
+    }
 
     // 整数主键：双游标按主键排序流式归并，内存 O(batch)；
     // 其他主键类型退回下面的集合比较（保持兼容）。
     if (single_int_pk(s) != nullptr) {
-      Status oa = src.open_cursor_ordered(t->name, pk->name);
-      Status ob = dst->open_cursor_ordered(t->name, pk->name);
+      Status oa = src.open_cursor_ordered(t->name, s.primary_key[0]);
+      Status ob = dst->open_cursor_ordered(t->name, s.primary_key[0]);
       if (oa.ok() && ob.ok()) {
         std::vector<Row> ra, rb, wbuf;
+        std::vector<Row> vbuf;
+        std::vector<std::string> vkeys;
         size_t ia = 0, ib = 0;
         auto refill = [](ISource& s2, std::vector<Row>& v, size_t& i) -> bool {
           if (i < v.size()) return true;
@@ -1100,7 +1591,7 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         };
         bool ha = refill(src, ra, ia);
         bool hb = refill(*dst, rb, ib);
-        int64_t missing = 0, extra = 0;
+        int64_t missing = 0, extra = 0, changed = 0;
         std::vector<std::string> dbuf;
         bool repair_failed = false;
         auto flush_w = [&]() {
@@ -1121,7 +1612,7 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
         };
         auto flush_d = [&]() {
           for (auto& lit : dbuf) {
-            Status ds = tgt.exec_sql(tgt.delete_sql(t->name, pk->name, lit));
+            Status ds = tgt.exec_sql(tgt.delete_sql(t->name, s.primary_key[0], lit));
             if (!ds.ok()) {
               m.log("[error] repair delete " + t->name + ": " + ds.str());
               repair_failed = true;
@@ -1135,6 +1626,33 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
             }
           }
           dbuf.clear();
+        };
+        auto flush_v = [&]() {
+          if (vkeys.empty()) return;
+          for (auto& lit : vkeys) {
+            Status ds = tgt.exec_sql(tgt.delete_sql(t->name, s.primary_key[0], lit));
+            if (!ds.ok()) {
+              m.log("[error] repair replace-delete " + t->name + ": " + ds.str());
+              repair_failed = true;
+            }
+          }
+          Status cs = tgt.commit();
+          if (!cs.ok()) {
+            m.log("[error] repair replace-commit " + t->name + ": " + cs.str());
+            repair_failed = true;
+          }
+          Status ws = tgt.write_batch(t->name, vbuf);
+          if (!ws.ok()) {
+            m.log("[error] repair replace-write " + t->name + ": " + ws.str());
+            repair_failed = true;
+          }
+          Status cs2 = tgt.commit();
+          if (!cs2.ok()) {
+            m.log("[error] repair replace-write-commit " + t->name + ": " + cs2.str());
+            repair_failed = true;
+          }
+          vkeys.clear();
+          vbuf.clear();
         };
         while (ha || hb) {
           if (!ha && !hb) break;
@@ -1161,6 +1679,11 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
               ++extra;
               hb = refill(*dst, rb, ib);
             } else {
+              if (!row_values_equal(ra[ia], rb[ib])) {
+                vkeys.push_back(rb[ib][(size_t)pk_idx].sql_literal());
+                vbuf.push_back(ra[ia]);
+                ++changed;
+              }
               ++ia;
               ++ib;
               ha = refill(src, ra, ia);
@@ -1169,9 +1692,11 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           }
           if (wbuf.size() >= 500) flush_w();
           if (dbuf.size() >= 500) flush_d();
+          if (vkeys.size() >= 500) flush_v();
         }
         flush_w();
         flush_d();
+        flush_v();
         Status fcs = tgt.commit();
         if (!fcs.ok()) {
           m.log("[error] repair final commit " + t->name + ": " + fcs.str());
@@ -1184,7 +1709,7 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           return Status::Err(Code::kDb, "repair failed for " + t->name);
         }
         m.log("repair " + t->name + ": +" + std::to_string(missing) + " / -" +
-              std::to_string(extra) + " (stream)");
+              std::to_string(extra) + " / ~" + std::to_string(changed) + " (stream)");
         repaired += 1;
         continue;
       }
@@ -1194,32 +1719,71 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
 
     std::unordered_set<std::string> a;
     std::unordered_set<std::string> b;
-    st = src.open_cursor(t->name);
+    std::vector<int> pk_idx_all;
+    for (const auto& key : s.primary_key) {
+      int idx = -1;
+      for (size_t i = 0; i < s.columns.size(); ++i)
+        if (s.columns[i].name == key) { idx = (int)i; break; }
+      if (idx < 0) { pk_idx_all.clear(); break; }
+      pk_idx_all.push_back(idx);
+    }
+    if (pk_idx_all.empty()) continue;
+
+    std::unordered_set<std::string> value_keys;
+    {
+      std::lock_guard<std::mutex> lk(m.mu);
+      auto it = m.mmv_table_mismatches.find(t->name);
+      if (it != m.mmv_table_mismatches.end()) {
+        for (const auto& mm : it->second) {
+          if (mm.kind == "value" && !mm.key_values.empty())
+            value_keys.insert(encode_key_values(mm.key_values));
+        }
+      }
+    }
+    std::unordered_map<std::string, Row> flagged_target;
+    std::vector<Row> replace_src, replace_tgt;
+
+    // Target first: keep only rows whose keys mmv flagged as value mismatches.
+    st = dst->open_cursor(t->name);
     if (!st.ok()) continue;
     std::vector<Row> rows;
     while (true) {
       rows.clear();
-      if (!src.fetch_batch(2000, rows).ok() || rows.empty()) break;
-      for (auto& r : rows)
-        if ((size_t)pk_idx < r.size()) a.insert(r[(size_t)pk_idx].sql_literal());
+      if (!dst->fetch_batch(2000, rows).ok() || rows.empty()) break;
+      for (auto& r : rows) {
+        if (r.size() < s.columns.size()) continue;
+        const std::string k = repair_key_text(r, pk_idx_all);
+        b.insert(k);
+        if (value_keys.count(k)) flagged_target.emplace(k, r);
+      }
     }
-    src.close_cursor();
+    dst->close_cursor();
 
-    st = dst->open_cursor(t->name);
+    st = src.open_cursor(t->name);
     if (!st.ok()) continue;
     while (true) {
       rows.clear();
-      if (!dst->fetch_batch(2000, rows).ok() || rows.empty()) break;
-      for (auto& r : rows)
-        if ((size_t)pk_idx < r.size()) b.insert(r[(size_t)pk_idx].sql_literal());
+      if (!src.fetch_batch(2000, rows).ok() || rows.empty()) break;
+      for (auto& r : rows) {
+        if (r.size() < s.columns.size()) continue;
+        const std::string k = repair_key_text(r, pk_idx_all);
+        a.insert(k);
+        if (value_keys.count(k)) {
+          auto it = flagged_target.find(k);
+          if (it != flagged_target.end() && !row_values_equal(r, it->second)) {
+            replace_src.push_back(r);
+            replace_tgt.push_back(it->second);
+          }
+        }
+      }
     }
-    dst->close_cursor();
+    src.close_cursor();
 
     std::vector<std::string> missing;
     std::vector<std::string> extra;
     for (auto& k : a) if (!b.count(k)) missing.push_back(k);
     for (auto& k : b) if (!a.count(k)) extra.push_back(k);
-    if (missing.empty() && extra.empty()) continue;
+    if (missing.empty() && extra.empty() && replace_src.empty()) continue;
 
     if (!missing.empty()) {
       std::unordered_set<std::string> want(missing.begin(), missing.end());
@@ -1231,7 +1795,8 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           rows.clear();
           if (!src.fetch_batch(2000, rows).ok() || rows.empty()) break;
           for (auto& r : rows) {
-            if ((size_t)pk_idx < r.size() && want.count(r[(size_t)pk_idx].sql_literal()))
+            if (r.size() == s.columns.size() &&
+                want.count(repair_key_text(r, pk_idx_all)))
               batch.push_back(r);
           }
           if (batch.size() >= 500) {
@@ -1255,8 +1820,10 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
           rows.clear();
           if (!dst->fetch_batch(2000, rows).ok() || rows.empty()) break;
           for (auto& r : rows) {
-            if ((size_t)pk_idx < r.size() && drop.count(r[(size_t)pk_idx].sql_literal())) {
-              tgt.exec_sql(tgt.delete_sql(t->name, pk->name, r[(size_t)pk_idx].sql_literal()));
+            if (r.size() < s.columns.size()) continue;
+            if (drop.count(repair_key_text(r, pk_idx_all))) {
+              const std::string del = tgt.delete_row_sql(s, r);
+              if (!del.empty()) tgt.exec_sql(del);
               if (++n % 200 == 0) tgt.commit();
             }
           }
@@ -1266,8 +1833,18 @@ Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
       }
     }
 
+    if (!replace_src.empty()) {
+      for (const auto& r : replace_tgt) {
+        const std::string del = tgt.delete_row_sql(s, r);
+        if (!del.empty()) tgt.exec_sql(del);
+      }
+      tgt.commit();
+      tgt.write_batch(t->name, replace_src);
+      tgt.commit();
+    }
+
     m.log("repair " + t->name + ": +" + std::to_string(missing.size()) + " / -" +
-          std::to_string(extra.size()));
+          std::to_string(extra.size()) + " / ~" + std::to_string(replace_src.size()));
     repaired += 1;
   }
   m.log("repair finished: " + std::to_string(repaired) + " table(s) adjusted");

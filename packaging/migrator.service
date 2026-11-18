@@ -1,0 +1,39 @@
+[Unit]
+Description=mini-migrator database migration service
+Documentation=https://github.com/openclaw/openclaw
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=migrator
+Group=migrator
+WorkingDirectory=/var/lib/migrator
+EnvironmentFile=-/etc/mini-migrator/migrator.env
+ExecStart=/usr/local/bin/migrator --mode sim --rows 200000 --tables 4 \
+    --http-bind 127.0.0.1 --http-token-file /etc/mini-migrator/dashboard.token \
+    --http-audit /var/log/mini-migrator/audit.log \
+    --instance-lock /var/lib/migrator/migrator.lock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0027
+ReadWritePaths=/var/lib/migrator /var/log/mini-migrator
+
+[Install]
+WantedBy=multi-user.target

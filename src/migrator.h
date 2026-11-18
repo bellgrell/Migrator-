@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,12 +33,14 @@ struct Value {
   int64_t i = 0;
   double d = 0.0;
   bool b = false;
+  bool dec = false;  // kString 但语义是定点数（DECIMAL/NUMERIC）
   std::string s;  // kString 或 kBytes（原始字节）
 
   static Value Null();
   static Value Int(int64_t v);
   static Value Dbl(double v);
   static Value Str(std::string v);
+  static Value Dec(std::string v);
   static Value Bool(bool v);
   static Value Bytes(std::string raw);
 
@@ -99,10 +102,21 @@ struct Options {
   bool pk_parallel = true;   // 单表按主键区间并行
   int log_every = 10;
   int http_port = 8123;
+  std::string http_bind = "127.0.0.1";
+  std::string http_token;                 // bearer token for the dashboard
+  std::string http_token_file;            // read token from a file
+  std::string http_audit = "out/audit.log";
+  bool http_insecure = false;             // allow remote plaintext (explicit)
+  bool http_cors = false;
+  std::string tls_cert;
+  std::string tls_key;
+  std::string instance_lock;              // flock-based single-instance guard
   int connect_timeout = 10;      // 连接/读写超时（秒）
   int connect_retries = 3;       // 连接失败重试次数
   int connect_backoff_ms = 500;  // 重试退避基数（毫秒）
   bool truncate_target = false;  // 迁移前 DROP 目标表，便于失败后重跑
+  bool idempotent = false;       // 重放安全：已存在的行跳过，不重复写入
+  bool skip_row_count = false;   // 大表跳过进度用的全表 COUNT(*)
   bool consistent_snapshot = false;  // MySQL 全局一致性快照（单连接）
   bool resume = false;               // 按主键水位断点续传
   bool repair = false;               // 校验后按主键补/删
@@ -128,6 +142,20 @@ struct Options {
   bool analyze_after = true;
   bool use_copy = true;
   bool checksum = true;
+  std::string verify_engine = "mmv";   // mmv（默认）| fnv（兼容回退）
+  bool verify_async = false;           // 迁移完成后异步全量校验（不阻塞退出）
+  int verify_async_threshold = 10000000;  // 行数 >= 阈值时自动异步
+  bool verify_wait = false;            // 锁被占用时等待而不是失败
+  bool explain_types = false;           // 只打印类型规则解析结果
+  bool use_type_rules = false;          // 用类型规则生成目标 DDL
+  bool check_type_rules = false;        // 检查规则冲突/覆盖
+  bool prove_type_rules = false;        // 形式化不变量检查（P1..P8）
+  bool dump_type_tests = false;         // 输出规则边界测试表
+  std::string type_rules_path;          // 外部规则文件（TSV）
+  std::string export_type_rules;        // 导出规则到 TSV
+  std::string emit_type_tests_dir;      // 生成边界测试清单目录
+  std::string verify_status_file;      // 异步子进程写出的状态文件
+  std::string exe_path;                 // 当前可执行文件绝对路径（子进程复用）
   int checksum_batch_bytes = 2097152;  // 校验批次字节预算
   std::size_t checksum_max_rows = 0;   // 每表最多校验行数（0 = 不限）
   bool with_views = false;
@@ -141,6 +169,10 @@ struct Options {
   std::string cdc_until;      // MySQL CDC cutover file:pos
   std::string cdc_until_lsn;  // PG CDC cutover LSN
   bool cdc_ddl = false;
+  // ODBC（SQL Server / Oracle）CDC
+  bool cdc_setup = false;                     // 开跑前启用源端日志（sp_cdc_enable_* / 补充日志）
+  int cdc_poll_ms = 1000;                     // 无新事件时的轮询间隔
+  std::string odbc_cdc_position_path = "out/odbc-cdc-position.txt";
   int64_t sim_rows = 200000;
   int sim_tables = 4;
   std::string out_dir = "out";
@@ -156,6 +188,15 @@ struct TableMetric {
   double finished_at = 0.0;
 };
 
+struct RepairMismatch {
+  std::string kind;
+  std::string key;
+  std::string column;
+  std::string source_value;
+  std::string target_value;
+  std::vector<std::string> key_values;
+};
+
 struct Metrics {
   std::atomic<int64_t> rows_done{0};
   std::atomic<int64_t> rows_total{0};
@@ -168,6 +209,12 @@ struct Metrics {
   std::atomic<bool> metrics_enabled{true};
   std::atomic<bool> verified{false};
   std::atomic<int64_t> verify_mismatch{0};
+  // Filled by the mmv verification engine; run_repair uses it to target only
+  // the tables that actually failed.
+  std::atomic<bool> mmv_verified{false};
+  std::atomic<int64_t> mmv_mismatches{0};
+  std::vector<std::string> mmv_failed_tables;  // guarded by mu
+  std::map<std::string, std::vector<RepairMismatch>> mmv_table_mismatches;  // guarded by mu
   std::atomic<int64_t> cdc_lag_bytes{0};
   double started_at = 0.0;
   double finished_at = 0.0;
@@ -275,6 +322,14 @@ class ITarget {
   virtual void close() = 0;
   virtual int64_t written(const std::string& table) = 0;
   virtual void reset_counters() {}
+  // 批量写失败后切换为幂等模式再重试（跳过已存在行，不产生重复）
+  virtual void enable_idempotent() {}
+  // 目标端当前的实际列（用于增量漂移时判断缺哪一列）
+  virtual Status table_columns(const std::string& table,
+                               std::vector<std::string>& out) {
+    (void)table; (void)out;
+    return Status::Err(Code::kUnsupported, "table_columns not supported");
+  }
   // 一轮迁移开始时清空目标端的名字注册表（索引名等）
   virtual void reset_names() {}
   // 目标方言的建表 DDL（默认 PostgreSQL/openGauss 方言）
@@ -329,6 +384,7 @@ bool checksum_equal(const Checksum& a, const Checksum& b);
 bool module_compiled(const std::string& name);
 Status load_modules_config(const std::string& path, Options& o);
 Status load_verify_config(const std::string& path, Options& o);
+bool write_text_atomic(const std::string& path, const std::string& data);
 
 std::string build_ddl(const TableSchema& s);
 std::string build_ddl_mysql(const TableSchema& s);
@@ -349,10 +405,15 @@ std::shared_ptr<ITarget> make_target(const Options& o, Status& st);
 Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget& tgt,
                      Metrics& m);
 Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m);
+Status spawn_async_verify(const Options& o, Metrics& m, int lock_fd);
+int acquire_verify_lock(const std::string& path, bool wait, std::string& err);
+void write_verify_status(const std::string& path, const std::string& state,
+                         int64_t pid, int code, const std::string& error,
+                         const std::string& tables);
 Status run_repair(const Options& o, ISource& src, ITarget& tgt, Metrics& m);
 
 void write_log_file(Metrics& m, const std::string& dir);
 
-int run_http_server(int port, Metrics& m);
+// Dashboard server lives in http.h (HttpOptions + run_http_server).
 
 }  // namespace mig

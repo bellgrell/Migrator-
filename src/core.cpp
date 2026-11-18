@@ -5,12 +5,25 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <map>
 #include <sstream>
 
 namespace mig {
+
+bool write_text_atomic(const std::string& path, const std::string& data) {
+  const std::string tmp = path + ".tmp";
+  std::ofstream f(tmp, std::ios::trunc | std::ios::binary);
+  if (!f) return false;
+  f.write(data.data(), (std::streamsize)data.size());
+  f.close();
+  if (!f) return false;
+  std::error_code ec;
+  std::filesystem::rename(tmp, path, ec);
+  return !ec;
+}
 
 bool module_compiled(const std::string& name) {
   return ModuleManager::instance().compiled(name);
@@ -91,6 +104,7 @@ Value Value::Null() { return Value(); }
 Value Value::Int(int64_t v) { Value x; x.type = ValType::kInt; x.i = v; return x; }
 Value Value::Dbl(double v) { Value x; x.type = ValType::kDouble; x.d = v; return x; }
 Value Value::Str(std::string v) { Value x; x.type = ValType::kString; x.s = std::move(v); return x; }
+Value Value::Dec(std::string v) { Value x; x.type = ValType::kString; x.dec = true; x.s = std::move(v); return x; }
 Value Value::Bool(bool v) { Value x; x.type = ValType::kBool; x.b = v; return x; }
 Value Value::Bytes(std::string raw) { Value x; x.type = ValType::kBytes; x.s = std::move(raw); return x; }
 
@@ -98,7 +112,9 @@ std::string Value::sql_literal() const {
   switch (type) {
     case ValType::kNull: return "NULL";
     case ValType::kInt: return std::to_string(i);
-    case ValType::kDouble: { std::ostringstream o; o << std::setprecision(10) << d; return o.str(); }
+    // 17 significant digits round-trip an IEEE-754 double; 10 was silently
+    // truncating values like 10.142857142 -> 10.14285714.
+    case ValType::kDouble: { std::ostringstream o; o << std::setprecision(17) << d; return o.str(); }
     case ValType::kBool: return b ? "true" : "false";
     case ValType::kBytes: {
       static const char* hex = "0123456789abcdef";
@@ -142,7 +158,7 @@ std::string Value::json() const {
   switch (type) {
     case ValType::kNull: return "null";
     case ValType::kInt: return std::to_string(i);
-    case ValType::kDouble: { std::ostringstream o; o << std::setprecision(10) << d; return o.str(); }
+    case ValType::kDouble: { std::ostringstream o; o << std::setprecision(17) << d; return o.str(); }
     case ValType::kBool: return b ? "true" : "false";
     case ValType::kBytes: {
       static const char* hex = "0123456789abcdef";
@@ -262,7 +278,13 @@ Status TypeMap::load(const std::string& path) {
 
 std::string TypeMap::map_type(const std::string& src_type) const {
   auto it = global_map.find(lower(src_type));
-  if (it != global_map.end()) return it->second;
+  if (it != global_map.end()) {
+    // Exact match with no source parameters: drop the {args} placeholder.
+    std::string dst = it->second;
+    const auto at = dst.find("{args}");
+    if (at != std::string::npos) dst.erase(at, 6);
+    return dst;
+  }
 
   // 去掉参数再试一次：varchar(64) -> varchar
   std::string base = lower(src_type);
@@ -387,14 +409,19 @@ std::string build_ddl(const TableSchema& s) {
   return out;
 }
 std::string ITarget::delete_row_sql(const TableSchema& s, const Row& row) {
-  if (s.primary_key.size() != 1) return "";
-  int pk = -1;
-  for (size_t i = 0; i < s.columns.size(); ++i) {
-    if (s.columns[i].name == s.primary_key[0]) { pk = (int)i; break; }
+  if (s.primary_key.empty() || row.size() != s.columns.size()) return "";
+  std::string where;
+  for (const auto& key : s.primary_key) {
+    int idx = -1;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (s.columns[i].name == key) { idx = (int)i; break; }
+    }
+    if (idx < 0) return "";
+    if (!where.empty()) where += " AND ";
+    where += "\"" + s.columns[(size_t)idx].name + "\"=" +
+             row[(size_t)idx].sql_literal();
   }
-  if (pk < 0 || (size_t)pk >= row.size()) return "";
-  return delete_sql(s.name, s.columns[(size_t)pk].name,
-                    row[(size_t)pk].sql_literal());
+  return "DELETE FROM \"" + s.name + "\" WHERE " + where + ";";
 }
 
 std::string ITarget::upsert_sql(const TableSchema& s, const Row& row) {

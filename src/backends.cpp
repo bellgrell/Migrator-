@@ -11,6 +11,9 @@ std::shared_ptr<ISource> make_source(const Options& o, Status& st) {
 #ifdef HAVE_PG
   if (k == "pg" || k == "og") return make_pg_source(o, st);
 #endif
+#ifdef HAVE_ODBC
+  if (k == "mssql" || k == "oracle") return make_odbc_source(o, st);
+#endif
   st = Status::Err(Code::kUnsupported, "source kind not built: " + k);
   return nullptr;
 }
@@ -23,6 +26,9 @@ std::shared_ptr<ITarget> make_target(const Options& o, Status& st) {
 #endif
 #ifdef HAVE_PG
   if (k == "pg" || k == "og") return make_pg_target(o, st);
+#endif
+#ifdef HAVE_ODBC
+  if (k == "mssql" || k == "oracle") return make_odbc_target(o, st);
 #endif
   st = Status::Err(Code::kUnsupported, "target kind not built: " + k);
   return nullptr;

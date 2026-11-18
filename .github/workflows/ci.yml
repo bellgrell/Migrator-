@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libmysqlclient-dev libpq-dev libssl-dev
+
+      - name: dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mysql-client libpq openssl@3
+
+      - name: build (make)
+        run: make -j2
+
+      - name: type rule checks
+        run: |
+          ./build/migrator --version
+          ./build/migrator --check-type-rules
+          ./build/migrator --prove-type-rules
+          ./build/migrator --export-type-rules /tmp/type_rules.json
+          ./build/migrator --prove-type-rules --type-rules /tmp/type_rules.json
+
+      - name: simulation smoke
+        run: ./build/migrator --mode sim --rows 5000 --tables 3 --exit --no-verify
+
+      - name: packaging smoke
+        run: |
+          make install DESTDIR="$PWD/_install" PREFIX=/usr/local
+          test -x _install/usr/local/bin/migrator
+          test -f _install/usr/local/share/mini-migrator/web/index.html
+          make dist
+          tar tzf dist/mini-migrator-*.tar.gz | head
+
+  sanitizers:
+    name: asan+ubsan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libmysqlclient-dev libpq-dev libssl-dev
+      - name: build
+        run: make -j2 asan
+      - name: run
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ./build/migrator --prove-type-rules
+          ./build/migrator --mode sim --rows 2000 --tables 2 --exit --no-verify
+
+  cmake:
+    name: cmake + ctest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libmysqlclient-dev libpq-dev libssl-dev
+      - name: configure
+        run: cmake -B build-cmake -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build-cmake -j2
+      - name: test
+        run: ctest --test-dir build-cmake --output-on-failure

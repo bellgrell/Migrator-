@@ -162,6 +162,29 @@
 </main>
 
 <script>
+// Bearer-token support for the protected dashboard. The token is kept in
+// sessionStorage, never in the URL, and sent on every API call.
+var TOKEN = sessionStorage.getItem('mm_token') || '';
+function authHeaders(extra){
+  var h = extra || {};
+  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  return h;
+}
+async function apiFetch(url, opts){
+  opts = opts || {};
+  opts.headers = authHeaders(opts.headers || {});
+  var r = await fetch(url, opts);
+  if (r.status === 401) {
+    var t = window.prompt('Dashboard token (Bearer):');
+    if (t) {
+      TOKEN = t.trim();
+      sessionStorage.setItem('mm_token', TOKEN);
+      opts.headers = authHeaders(opts.headers || {});
+      r = await fetch(url, opts);
+    }
+  }
+  return r;
+}
 var I18N = {
   zh: {
     title: "mini-migrator · 迁移监控",
@@ -380,7 +403,7 @@ function renderFeatures(f){
 
 async function loadModules(){
   try {
-    var r = await fetch('/api/modules', {cache:'no-store'});
+    var r = await apiFetch('/api/modules', {cache:'no-store'});
     moduleConfig = await r.json();
     if (lastFeatures) renderFeatures(lastFeatures);
   } catch (e) {}
@@ -392,7 +415,7 @@ async function saveModules(){
   for (var i = 0; i < boxes.length; i++) out[boxes[i].getAttribute('data-mod')] = boxes[i].checked;
   var msg = document.getElementById('moduleMsg');
   try {
-    var r = await fetch('/api/modules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(out)});
+    var r = await apiFetch('/api/modules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(out)});
     var j = await r.json();
     msg.textContent = j.restart_required ? t('savedRestart') : t('saveModules');
     moduleConfig = out;
@@ -405,7 +428,7 @@ window.saveModules = saveModules;
 
 async function loadVerify(){
   try {
-    var r = await fetch('/api/verify', {cache:'no-store'});
+    var r = await apiFetch('/api/verify', {cache:'no-store'});
     var j = await r.json();
     var mode = j.mode || 'local';
     var xs = document.querySelectorAll('#verifyForm input[name=verifyMode]');
@@ -419,7 +442,7 @@ async function saveVerify(){
   for (var i = 0; i < xs.length; i++) if (xs[i].checked) mode = xs[i].value;
   var msg = document.getElementById('verifyMsg');
   try {
-    var r = await fetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})});
+    var r = await apiFetch('/api/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})});
     var j = await r.json();
     msg.textContent = j.restart_required ? t('savedRestart') : t('saveVerify');
   } catch (e) {
@@ -471,16 +494,16 @@ function drawChart(series){
 }
 async function tick(){
   try{
-    var rs=await fetch('/api/status',{cache:'no-store'});
+    var rs=await apiFetch('/api/status',{cache:'no-store'});
     var s=await rs.json();
     renderStatus(s);
-    var rt=await fetch('/api/tables',{cache:'no-store'});
+    var rt=await apiFetch('/api/tables',{cache:'no-store'});
     renderTables(await rt.json());
-    var re=await fetch('/api/events',{cache:'no-store'});
+    var re=await apiFetch('/api/events',{cache:'no-store'});
     renderEvents(await re.json());
-    var rq=await fetch('/api/series',{cache:'no-store'});
+    var rq=await apiFetch('/api/series',{cache:'no-store'});
     drawChart(await rq.json());
-    var rf=await fetch('/api/features',{cache:'no-store'});
+    var rf=await apiFetch('/api/features',{cache:'no-store'});
     renderFeatures(await rf.json());
     if (moduleConfig === null) await loadModules();
     if (!verifyLoaded) { verifyLoaded = true; await loadVerify(); }
