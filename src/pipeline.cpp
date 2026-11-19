@@ -819,7 +819,9 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     std::vector<TableJob> plain;
     std::vector<TableJob> ranged;
     for (const auto& j : jobs) {
-      const bool big = o.pk_parallel && o.workers > 1 &&
+      const bool odbc_target =
+          (o.target_kind == "mssql" || o.target_kind == "oracle");
+      const bool big = o.pk_parallel && !odbc_target && o.workers > 1 &&
                        j.rows >= (int64_t)o.pk_min_rows &&
                        [&] { std::string c; return src.pk_range_column(j.schema, c).ok(); }() &&
                        (jobs.size() == 1 || j.rows * 2 >= total_rows);

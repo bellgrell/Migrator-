@@ -612,6 +612,21 @@ class OdbcSource : public OdbcConn, public ISource {
   std::vector<SQLSMALLINT> types_;
 };
 
+class OdbcWriter : public OdbcConn {
+ public:
+  explicit OdbcWriter(const Options& o) : OdbcConn(o), opts_(o) {}
+  bool open(const std::string& kind) {
+    if (!connect_odbc(opts_.target, kind)) return false;
+    SQLSetConnectAttr(dbc_, SQL_ATTR_AUTOCOMMIT,
+                      (SQLPOINTER)SQL_AUTOCOMMIT_ON, 0);
+    return true;
+  }
+  Status exec(const std::string& sql) { return exec_sql(sql); }
+
+ private:
+  Options opts_;
+};
+
 class OdbcTarget : public OdbcConn, public ITarget {
  public:
   explicit OdbcTarget(const Options& o)
@@ -647,20 +662,33 @@ class OdbcTarget : public OdbcConn, public ITarget {
   }
 
   Status create_table(const TableSchema& s, const std::string& ddl) override {
-    schemas_[s.name] = s;
-    return exec_sql(ddl);
+    {
+      std::lock_guard<std::mutex> lk(schema_mu_);
+      schemas_[s.name] = s;
+    }
+    Status st = exec_sql(ddl);
+    if (!st.ok()) return st;
+    return commit();
   }
 
   Status drop_table(const std::string& table) override {
-    return exec_sql("DROP TABLE " + qid(table));
+    Status st = exec_sql("DROP TABLE " + qid(table));
+    if (!st.ok()) return st;
+    return commit();
   }
 
   Status write_batch(const std::string& table, const std::vector<Row>& rows) override {
     if (rows.empty()) return Status::OK();
-    auto it = schemas_.find(table);
-    if (it == schemas_.end())
-      return Status::Err(Code::kDb, "odbc target: schema not loaded for " + table);
-    const auto& s = it->second;
+    TableSchema s;
+    {
+      std::lock_guard<std::mutex> lk(schema_mu_);
+      auto it = schemas_.find(table);
+      if (it == schemas_.end())
+        return Status::Err(Code::kDb, "odbc target: schema not loaded for " + table);
+      s = it->second;
+    }
+    OdbcWriter* w = writer();
+    if (!w) return Status::Err(Code::kDb, "odbc target: worker connect failed");
     std::string cols;
     for (size_t i = 0; i < s.columns.size(); ++i) {
       if (i) cols += ",";
@@ -679,7 +707,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
           sql += ") ";
         }
         sql += "SELECT 1 FROM DUAL";
-        Status st = exec_sql(sql);
+        Status st = w->exec(sql);
         if (!st.ok()) return st;
       }
     } else {
@@ -695,7 +723,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
           }
           sql += ")";
         }
-        Status st = exec_sql(sql);
+        Status st = w->exec(sql);
         if (!st.ok()) return st;
       }
     }
@@ -786,6 +814,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
   }
 
   Status commit() override {
+    std::lock_guard<std::mutex> lk(commit_mu_);
     if (!dbc_) return Status::Err(Code::kDb, "not connected");
     return SQLEndTran(SQL_HANDLE_DBC, dbc_, SQL_COMMIT) == SQL_SUCCESS
                ? Status::OK()
@@ -793,6 +822,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
   }
 
   Status rollback() override {
+    std::lock_guard<std::mutex> lk(commit_mu_);
     if (!dbc_) return Status::OK();
     return SQLEndTran(SQL_HANDLE_DBC, dbc_, SQL_ROLLBACK) == SQL_SUCCESS
                ? Status::OK()
@@ -812,6 +842,22 @@ class OdbcTarget : public OdbcConn, public ITarget {
   std::string describe() override { return kind_ + " target (ODBC)"; }
 
  private:
+  OdbcWriter* writer() {
+    static thread_local std::map<const OdbcTarget*, std::unique_ptr<OdbcWriter>>
+        workers;
+    auto it = workers.find(this);
+    if (it != workers.end()) return it->second.get();
+    // unixODBC's Windows driver manager is not safe for concurrent
+    // SQLDriverConnect/SQLAllocHandle calls; serialize connection setup only.
+    static std::mutex connect_mu;
+    std::lock_guard<std::mutex> lk(connect_mu);
+    auto w = std::make_unique<OdbcWriter>(opts_);
+    if (!w->open(kind_)) return nullptr;
+    OdbcWriter* raw = w.get();
+    workers.emplace(this, std::move(w));
+    return raw;
+  }
+
   // NULL 字面量需要显式类型，否则 Oracle 的 SELECT ... FROM dual 会给出
   // CHAR(0)，MERGE 时报 ORA-00932。
   std::string typed_lit(const Value& v, const ColumnDef& c) const {
@@ -824,6 +870,8 @@ class OdbcTarget : public OdbcConn, public ITarget {
   std::map<std::string, TableSchema> schemas_;
   std::map<std::string, int64_t> written_;
   std::mutex mu_;
+  std::mutex schema_mu_;
+  std::mutex commit_mu_;
 };
 
 }  // namespace
