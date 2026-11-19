@@ -137,6 +137,10 @@ class OdbcConn {
   ~OdbcConn() { disconnect(); }
 
   bool connect_odbc(const std::string& dsnstr, const std::string& kind) {
+    // unixODBC's Windows driver manager is not safe for concurrent
+    // SQLDriverConnect/SQLAllocHandle calls from range workers.
+    static std::mutex connect_mu;
+    std::lock_guard<std::mutex> connect_lk(connect_mu);
     kind_ = kind;
     const std::string dsn = dsn_get(dsnstr, "dsn");
     const std::string host = dsn_get(dsnstr, "host", "127.0.0.1");
@@ -467,6 +471,11 @@ class OdbcSource : public OdbcConn, public ISource {
     return run_cursor("SELECT * FROM " + qid(table));
   }
 
+  Status open_cursor_ordered(const std::string& table,
+                             const std::string& column) override {
+    return run_cursor("SELECT * FROM " + qid(table) + " ORDER BY " + qid(column));
+  }
+
   // 断点续传：从上次写入的主键字面量之后继续。
   Status open_cursor_from(const std::string& table, const std::string& pk_col,
                           const std::string& after_literal) override {
@@ -669,6 +678,11 @@ class OdbcTarget : public OdbcConn, public ITarget {
     Status st = exec_sql(ddl);
     if (!st.ok()) return st;
     return commit();
+  }
+
+  void register_schema(const TableSchema& s) override {
+    std::lock_guard<std::mutex> lk(schema_mu_);
+    schemas_[s.name] = s;
   }
 
   Status drop_table(const std::string& table) override {

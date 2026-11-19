@@ -496,6 +496,8 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
         tmet->errors += 1;
         return;
       }
+      g->register_schema(job.schema);
+
       Status os = s->open_cursor_range(job.name, pk_name, a, z);
       if (!os.ok()) {
         m.log("[error] range " + std::to_string(i) + ": " + os.str());
@@ -819,9 +821,7 @@ Status run_migration(const Options& o, const TypeMap& tm, ISource& src, ITarget&
     std::vector<TableJob> plain;
     std::vector<TableJob> ranged;
     for (const auto& j : jobs) {
-      const bool odbc_target =
-          (o.target_kind == "mssql" || o.target_kind == "oracle");
-      const bool big = o.pk_parallel && !odbc_target && o.workers > 1 &&
+      const bool big = o.pk_parallel && o.workers > 1 &&
                        j.rows >= (int64_t)o.pk_min_rows &&
                        [&] { std::string c; return src.pk_range_column(j.schema, c).ok(); }() &&
                        (jobs.size() == 1 || j.rows * 2 >= total_rows);
@@ -1208,8 +1208,10 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
 
   // verify-only has no migration metrics: count target rows through a verifier
   // source instead of tgt.written().
+  const bool odbc_target =
+      (o.target_kind == "mssql" || o.target_kind == "oracle");
   std::shared_ptr<ISource> count_dst;
-  if (verify_only && o.target_kind != "sim") {
+  if ((verify_only || odbc_target) && o.target_kind != "sim") {
     Status cst;
     if (o.target_kind == "mysql") {
       Options vo = o;
@@ -1235,7 +1237,7 @@ Status run_verify(const Options& o, ISource& src, ITarget& tgt, Metrics& m) {
     if (t->total == 0) continue;  // rebuild / skip 表不参与行数校验
     const int64_t a = src.total_rows(t->name);
     int64_t b = 0;
-    if (verify_only) {
+    if (verify_only || odbc_target) {
       if (!count_dst) {
         ++mismatch;
         m.log("[error] verify-only: cannot open target verifier");

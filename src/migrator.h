@@ -315,6 +315,9 @@ class ITarget {
   virtual ~ITarget() = default;
   virtual Status connect() = 0;
   virtual Status create_table(const TableSchema& s, const std::string& ddl) = 0;
+  // Range workers create their own target instances; they do not run DDL,
+  // so the schema cache must be seeded explicitly.
+  virtual void register_schema(const TableSchema& s) {}
   virtual Status write_batch(const std::string& table, const std::vector<Row>& rows) = 0;
   virtual Status exec_sql(const std::string& sql) = 0;
   virtual Status commit() = 0;

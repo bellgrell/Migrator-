@@ -15,6 +15,9 @@ std::string normalize_decimal_text(std::string s) {
     neg = (s[0] == '-');
     s.erase(0, 1);
   }
+  // SQL Server/Oracle often render decimals as ".3300"; prefix the zero so
+  // they compare equal to MySQL/PostgreSQL's "0.3300".
+  if (!s.empty() && s[0] == '.') s = "0" + s;
   const size_t dot = s.find('.');
   if (dot != std::string::npos) {
     size_t last = s.find_last_not_of('0');
