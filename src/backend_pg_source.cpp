@@ -351,6 +351,8 @@ class PgSource : public ISource, public DbBase {
           row.push_back(Value::Int(std::strtoll(v, nullptr, 10)));
         } else if (t == 700 || t == 701) {
           row.push_back(Value::Dbl(std::strtod(v, nullptr)));
+        } else if (t == 1700) {
+          row.push_back(Value::Dec(v));
         } else if (t == 16) {
           row.push_back(Value::Bool(v[0] == 't'));
         } else if (t == 17) {
