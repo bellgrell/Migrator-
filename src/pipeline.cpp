@@ -267,9 +267,9 @@ bool copy_table(const Options& o, const TableJob& job, ISource& src, ITarget& tg
   for (const auto& c : job.schema.columns) {
     if (c.binary) { has_binary = true; break; }
   }
-  if (has_binary && batch_size > 8) {
-    batch_size = 8;
-    m.log("[info] binary table " + job.name + ": batch capped to 8");
+  if (has_binary && batch_size > 256) {
+    batch_size = 256;
+    m.log("[info] binary table " + job.name + ": batch capped to 256");
   }
   const int64_t total_batches =
       job.rows > 0 ? (job.rows + batch_size - 1) / batch_size : 0;
@@ -459,9 +459,9 @@ bool copy_table_ranges(const Options& o, const TableJob& job, ISource& src,
   for (const auto& c : job.schema.columns) {
     if (c.binary) { has_binary = true; break; }
   }
-  if (has_binary && batch_size > 8) {
-    batch_size = 8;
-    m.log("[info] binary range " + job.name + ": batch capped to 8");
+  if (has_binary && batch_size > 256) {
+    batch_size = 256;
+    m.log("[info] binary range " + job.name + ": batch capped to 256");
   }
   const double t_start = now_sec();
   std::atomic<int> failures{0};

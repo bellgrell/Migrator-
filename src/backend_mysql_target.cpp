@@ -354,7 +354,9 @@ class MySqlTarget : public ITarget, public DbBase {
     else if (opts_.load_mode == "ignore") verb = "IGNORE ";
     else if (opts_.load_mode == "insert") verb = "";
     else verb = resume_ ? "IGNORE " : "";
-    std::string sql = "LOAD DATA LOCAL INFILE '" + st.loader.path() + "' " + verb +
+    std::string load_path = st.loader.path();
+    for (char& c : load_path) if (c == '\\') c = '/';
+    std::string sql = "LOAD DATA LOCAL INFILE '" + load_path + "' " + verb +
                       "INTO TABLE `" + table + "` CHARACTER SET utf8mb4 "
                       "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
                       "LINES TERMINATED BY '\\n' (" + cols + ")";
