@@ -38,10 +38,24 @@ std::string LocalFileLoader::field(const Value& v) {
   }
 }
 
-void LocalFileLoader::write_row(const Row& row) {
+std::string LocalFileLoader::hex_field(const Value& v) {
+  if (v.type == ValType::kNull) return "\\N";
+  static const char* d = "0123456789abcdef";
+  std::string o;
+  o.reserve(v.s.size() * 2);
+  for (unsigned char c : v.s) {
+    o.push_back(d[c >> 4]);
+    o.push_back(d[c & 0xF]);
+  }
+  return o;
+}
+
+void LocalFileLoader::write_row(const Row& row,
+                                const std::vector<bool>* hex_cols) {
   for (size_t j = 0; j < row.size(); ++j) {
     if (j) out_.put('\t');
-    out_ << field(row[j]);
+    const bool hex = hex_cols && j < hex_cols->size() && (*hex_cols)[j];
+    out_ << (hex ? hex_field(row[j]) : field(row[j]));
   }
   out_.put('\n');
   ++pending_;

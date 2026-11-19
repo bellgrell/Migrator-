@@ -147,10 +147,10 @@ class MySqlTarget : public ITarget, public DbBase {
     if (mysql_query(conn_, ddl.c_str())) return err("create_table " + s.name);
     auto& st = state(s.name);
     st.cols.clear();
-    st.binary = false;
+    st.bin_cols.clear();
     for (const auto& c : s.columns) {
       st.cols.push_back(c.name);
-      if (c.binary) st.binary = true;
+      st.bin_cols.push_back(c.binary);
     }
     st.ensure_done = true;
     reset_file(st);
@@ -180,9 +180,10 @@ class MySqlTarget : public ITarget, public DbBase {
     if (rows.empty()) return Status::OK();
     auto& st = state(table);
     ensure_columns(table, st);
-    if (load_enabled_ && st.load_ok() && !contains_bytes(rows)) {
+    const bool force_insert = (opts_.load_mode == "insert");
+    if (load_enabled_ && st.load_ok() && !force_insert) {
       if (!st.loader.is_open()) st.loader.open();
-      for (const auto& r : rows) st.loader.write_row(r);
+      for (const auto& r : rows) st.loader.write_row(r, &st.bin_cols);
     } else {
       Status s = insert_batch(table, rows);
       if (!s.ok()) return s;
@@ -256,16 +257,16 @@ class MySqlTarget : public ITarget, public DbBase {
     return "MySQL target (" + dsn_get(opts_.target, "host", "127.0.0.1") + ":" +
            dsn_get(opts_.target, "port", "3306") + "/" +
            dsn_get(opts_.target, "db", "?") + ", " +
-           (load_enabled_ ? "LOAD DATA" : "INSERT") + ")";
+           (load_enabled_ && opts_.load_mode != "insert" ? "LOAD DATA" : "INSERT") + ")";
   }
 
  private:
   struct TableState {
     std::vector<std::string> cols;
+    std::vector<bool> bin_cols;
     LocalFileLoader loader;
-    bool binary = false;
     bool ensure_done = false;
-    bool load_ok() const { return ensure_done && !binary; }
+    bool load_ok() const { return ensure_done; }
   };
 
   TableState& state(const std::string& table) {
@@ -296,12 +297,15 @@ class MySqlTarget : public ITarget, public DbBase {
       if (MYSQL_RES* r = mysql_store_result(conn_)) {
         MYSQL_ROW row;
         while ((row = mysql_fetch_row(r)) != nullptr) {
-          if (row[0]) st.cols.emplace_back(row[0]);
-          if (row[1]) {
-            const std::string t = row[1];
-            if (t.find("blob") != std::string::npos ||
-                t.find("binary") != std::string::npos)
-              st.binary = true;
+          if (row[0]) {
+            st.cols.emplace_back(row[0]);
+            bool bin = false;
+            if (row[1]) {
+              const std::string t = row[1];
+              bin = t.find("blob") != std::string::npos ||
+                    t.find("binary") != std::string::npos;
+            }
+            st.bin_cols.push_back(bin);
           }
         }
         mysql_free_result(r);
@@ -332,10 +336,18 @@ class MySqlTarget : public ITarget, public DbBase {
       return Status::Err(Code::kDb,
                          "LOAD DATA buffer without local_infile for " + table);
     }
-    std::string cols;
+    std::string cols, sets;
     for (size_t i = 0; i < st.cols.size(); ++i) {
       if (i) cols += ",";
-      cols += "`" + st.cols[i] + "`";
+      const bool bin = i < st.bin_cols.size() && st.bin_cols[i];
+      if (bin) {
+        const std::string var = "@mig_b" + std::to_string(i);
+        cols += var;
+        if (!sets.empty()) sets += ",";
+        sets += "`" + st.cols[i] + "`=UNHEX(" + var + ")";
+      } else {
+        cols += "`" + st.cols[i] + "`";
+      }
     }
     std::string verb;
     if (opts_.load_mode == "replace") verb = "REPLACE ";
@@ -346,6 +358,7 @@ class MySqlTarget : public ITarget, public DbBase {
                       "INTO TABLE `" + table + "` CHARACTER SET utf8mb4 "
                       "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
                       "LINES TERMINATED BY '\\n' (" + cols + ")";
+    if (!sets.empty()) sql += " SET " + sets;
     if (mysql_query(conn_, sql.c_str())) return err("load data " + table);
     consume_results();
     st.loader.reset();

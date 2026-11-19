@@ -15,7 +15,7 @@ class LocalFileLoader {
   const std::string& path() const { return path_; }
   bool is_open() const { return out_.is_open(); }
   void open() { out_.open(path_, std::ios::binary | std::ios::trunc); }
-  void write_row(const Row& row);
+  void write_row(const Row& row, const std::vector<bool>* hex_cols = nullptr);
   void close_file();
   void remove_file();
   void reset();
@@ -23,6 +23,7 @@ class LocalFileLoader {
 
   static std::string escape(const std::string& s);
   static std::string field(const Value& v);
+  static std::string hex_field(const Value& v);
 
  private:
   std::string path_;
