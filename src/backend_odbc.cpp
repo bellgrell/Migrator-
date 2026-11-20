@@ -1,3 +1,4 @@
+#include "providers.h"
 #include "backends.h"
 #include "db_base.h"
 #include "checksum_normalizer.h"
@@ -18,6 +19,9 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <filesystem>
+#include <atomic>
+#include <unistd.h>
 #include <vector>
 
 namespace mig {
@@ -131,9 +135,19 @@ std::string args_of(const std::string& s) {
   return s.substr(p, q - p + 1);
 }
 
+bool col_is_binary(const ColumnDef& c) {
+  if (c.binary) return true;
+  const std::string t = lower_ascii(c.src_type);
+  return t.find("binary") != std::string::npos || t.find("blob") != std::string::npos ||
+         t.find("bytea") != std::string::npos || t.find("image") != std::string::npos;
+}
+
 class OdbcConn {
  protected:
   explicit OdbcConn(const Options& o) : opts_(o) {}
+ public:
+  SQLHDBC raw_dbc() const { return dbc_; }
+ protected:
   ~OdbcConn() { disconnect(); }
 
   bool connect_odbc(const std::string& dsnstr, const std::string& kind) {
@@ -149,7 +163,7 @@ class OdbcConn {
     const std::string pass = resolve_secret(dsn_get(dsnstr, "password", ""));
     const std::string db = dsn_get(dsnstr, "db", "");
     const std::string charset = dsn_get(dsnstr, "charset", "UTF-8");
-    const std::string driver = dsn_get(dsnstr, "driver", "FreeTDS");
+    const std::string driver = dsn_get(dsnstr, "driver", providers().mssql_driver);
     const bool freetds = (driver == "FreeTDS");
     std::string cs;
     if (!dsn.empty()) {
@@ -171,7 +185,7 @@ class OdbcConn {
       if (!db.empty()) cs += "DATABASE=" + db + ";";
     } else {
       const std::string drv =
-          dsn_get(dsnstr, "driver", "Oracle in instantclient_23_x");
+          dsn_get(dsnstr, "driver", providers().oracle_driver);
       cs = "DRIVER={" + drv + "};DBQ=" + host + ":" + port + "/" + db +
            ";UID=" + user + ";PWD=" + pass + ";";
     }
@@ -322,6 +336,15 @@ class OdbcConn {
           base == "timestamp without time zone" || base == "timestamp with time zone")
         return "datetime2";
       if (base == "time") return "time";
+      if (base == "number") return "decimal" + (args.empty() ? "(18,4)" : args);
+      if (base == "varchar2" || base == "nvarchar2")
+        return "nvarchar" + (args.empty() ? "(max)" : args);
+      if (base == "clob" || base == "nclob" || base == "long" || base == "xmltype")
+        return "nvarchar(max)";
+      if (base == "blob" || base == "raw" || base == "long raw")
+        return "varbinary(max)";
+      if (base == "binary_double" || base == "binary_float") return "float";
+      if (base == "rowid") return "nvarchar(64)";
       return raw;
     }
     if (base == "int" || base == "integer" || base == "bigint" || base == "mediumint")
@@ -488,19 +511,111 @@ class OdbcSource : public OdbcConn, public ISource {
   Status fetch_batch(int n, std::vector<Row>& out) override {
     out.clear();
     if (!cur_) return Status::OK();
-    for (int k = 0; k < n; ++k) {
-      const SQLRETURN rc = SQLFetch(cur_);
-      if (rc == SQL_NO_DATA) break;
-      if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
-        err_ = odbc_error(SQL_HANDLE_STMT, cur_);
-        return Status::Err(Code::kDb, "odbc fetch: " + err_);
-      }
-      Row row;
-      for (SQLUSMALLINT i = 1; i <= ncols_; ++i)
-        row.push_back(read_value(cur_, i, types_[i - 1]));
-      out.push_back(std::move(row));
+    while ((int)pending_.size() < n) {
+      if (!fetch_rowset()) break;
+    }
+    while (!pending_.empty() && (int)out.size() < n) {
+      out.push_back(std::move(pending_.front()));
+      pending_.pop_front();
     }
     return Status::OK();
+  }
+
+  // 返回 false 表示没有更多数据（或出错）
+  bool fetch_rowset() {
+    if (!block_) return fetch_one_row();
+    rows_fetched_ = 0;
+    const SQLRETURN rc = SQLFetch(cur_);
+    if (rc == SQL_NO_DATA) return false;
+    if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
+      err_ = odbc_error(SQL_HANDLE_STMT, cur_);
+      return false;
+    }
+    const SQLULEN got = rows_fetched_ == 0 ? 1 : rows_fetched_;
+    for (SQLULEN r = 0; r < got; ++r) {
+      Row row;
+      for (SQLUSMALLINT c = 1; c <= ncols_; ++c) {
+        const size_t idx = (size_t)(c - 1);
+        const SQLLEN ind = bi_[idx][r];
+        if (ind == SQL_NULL_DATA) { row.push_back(Value::Null()); continue; }
+        const char* base = bb_[idx].data() + r * bsize_[idx];
+        size_t len = (ind == SQL_NO_TOTAL || ind < 0) ? std::strlen(base) : (size_t)ind;
+        if (len > bsize_[idx] - 1) len = bsize_[idx] - 1;
+        row.push_back(value_from_text(base, len, types_[idx], bbin_[idx]));
+      }
+      pending_.push_back(std::move(row));
+    }
+    return true;
+  }
+
+  bool fetch_one_row() {
+    const SQLRETURN rc = SQLFetch(cur_);
+    if (rc == SQL_NO_DATA) return false;
+    if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
+      err_ = odbc_error(SQL_HANDLE_STMT, cur_);
+      return false;
+    }
+    Row row;
+    for (SQLUSMALLINT i = 1; i <= ncols_; ++i)
+      row.push_back(read_value(cur_, i, types_[i - 1]));
+    pending_.push_back(std::move(row));
+    return true;
+  }
+
+  Value value_from_text(const char* s, size_t len, SQLSMALLINT type, bool bin) {
+    if (bin) return Value::Bytes(std::string(s, len));
+    const std::string out(s, len);
+    if (type == SQL_INTEGER || type == SQL_SMALLINT || type == SQL_TINYINT ||
+        type == SQL_BIGINT)
+      return Value::Int(std::strtoll(out.c_str(), nullptr, 10));
+    if (type == SQL_REAL || type == SQL_FLOAT || type == SQL_DOUBLE)
+      return Value::Dbl(std::strtod(out.c_str(), nullptr));
+    if (type == SQL_DECIMAL || type == SQL_NUMERIC) return Value::Dec(out);
+    if (kind_ == "oracle" && (type == SQL_VARCHAR || type == SQL_CHAR) &&
+        numeric_text(out))
+      return Value::Dec(out);
+    if (type == SQL_BIT)
+      return Value::Int(out == "1" || out == "true" || out == "TRUE" ? 1 : 0);
+    if (type == SQL_TYPE_TIMESTAMP || type == SQL_TIMESTAMP || type == SQL_DATE ||
+        type == SQL_TIME)
+      return Value::Str(trim_ts(out));
+    return Value::Str(out);
+  }
+
+  void setup_block() {
+    block_ = false;
+    if (!std::getenv("MIG_ODBC_BLOCK")) return;
+    if (const char* rs = std::getenv("MIG_ODBC_ROWSET")) { int v = std::atoi(rs); if (v >= 50 && v <= 5000) rowset_ = v; }
+    if (ncols_ <= 0 || ncols_ > 64) return;
+    for (SQLUSMALLINT i = 0; i < (SQLUSMALLINT)ncols_; ++i) {
+      const SQLSMALLINT t = types_[i];
+      if (t == SQL_LONGVARCHAR || t == SQL_LONGVARBINARY || t == SQL_WLONGVARCHAR)
+        return;
+    }
+    bsize_.assign(ncols_, 0);
+    bbin_.assign(ncols_, false);
+    bb_.assign(ncols_, {});
+    bi_.assign(ncols_, {});
+    for (int i = 0; i < ncols_; ++i) {
+      const SQLSMALLINT t = types_[i];
+      const bool bin = (t == SQL_BINARY || t == SQL_VARBINARY || t == SQL_LONGVARBINARY);
+      size_t elem = (size_t)sizes_[i];
+      if (elem < 64) elem = 64;
+      if (elem > (bin ? 8192u : 1024u)) elem = bin ? 8192u : 1024u;
+      elem += 1;
+      bsize_[i] = elem;
+      bbin_[i] = bin;
+      bb_[i].assign((size_t)rowset_ * elem, 0);
+      bi_[i].assign((size_t)rowset_, 0);
+      if (SQLBindCol(cur_, (SQLUSMALLINT)(i + 1), bin ? SQL_C_BINARY : SQL_C_CHAR,
+                     bb_[i].data(), (SQLLEN)elem, bi_[i].data()) != SQL_SUCCESS)
+        return;
+    }
+    SQLSetStmtAttr(cur_, SQL_ATTR_ROW_BIND_TYPE, (SQLPOINTER)SQL_BIND_BY_COLUMN, 0);
+    SQLSetStmtAttr(cur_, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)(intptr_t)rowset_, 0);
+    SQLSetStmtAttr(cur_, SQL_ATTR_ROWS_FETCHED_PTR, (SQLPOINTER)&rows_fetched_, 0);
+    block_ = true;
+    if (std::getenv("MIG_DEBUG_BLOCK")) std::fprintf(stderr, "[block] enabled cols=%d rowset=%d\n", (int)ncols_, rowset_);
   }
 
   Status run_cursor(const std::string& sql) {
@@ -515,6 +630,9 @@ class OdbcSource : public OdbcConn, public ISource {
     SQLNumResultCols(cur_, &n);
     ncols_ = n;
     types_.assign(ncols_, SQL_UNKNOWN_TYPE);
+    sizes_.assign(ncols_, 0);
+    block_ = false;
+    pending_.clear();
     for (SQLUSMALLINT i = 1; i <= ncols_; ++i) {
       char name[256];
       SQLSMALLINT nlen = 0, dtype = 0, digits = 0, nullable = 0;
@@ -522,11 +640,15 @@ class OdbcSource : public OdbcConn, public ISource {
       SQLDescribeCol(cur_, i, (SQLCHAR*)name, sizeof name, &nlen, &dtype, &size,
                      &digits, &nullable);
       types_[i - 1] = dtype;
+      sizes_[i - 1] = size;
     }
+    setup_block();
     return Status::OK();
   }
 
   void close_cursor() override {
+    block_ = false;
+    pending_.clear();
     if (cur_) {
       SQLFreeStmt(cur_, SQL_CLOSE);
       SQLFreeHandle(SQL_HANDLE_STMT, cur_);
@@ -619,6 +741,15 @@ class OdbcSource : public OdbcConn, public ISource {
   SQLHSTMT cur_ = SQL_NULL_HANDLE;
   SQLSMALLINT ncols_ = 0;
   std::vector<SQLSMALLINT> types_;
+  std::vector<SQLULEN> sizes_;
+  bool block_ = false;
+  int rowset_ = 500;
+  std::vector<std::vector<char>> bb_;
+  std::vector<std::vector<SQLLEN>> bi_;
+  std::vector<SQLULEN> bsize_;
+  std::vector<bool> bbin_;
+  SQLULEN rows_fetched_ = 0;
+  std::deque<Row> pending_;
 };
 
 class OdbcWriter : public OdbcConn {
@@ -677,6 +808,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
     }
     Status st = exec_sql(ddl);
     if (!st.ok()) return st;
+    if (kind_ == "oracle") exec_sql("ALTER TABLE " + qid(s.name) + " NOLOGGING");
     return commit();
   }
 
@@ -701,6 +833,26 @@ class OdbcTarget : public OdbcConn, public ITarget {
         return Status::Err(Code::kDb, "odbc target: schema not loaded for " + table);
       s = it->second;
     }
+    // MSSQL: bcp 文件通道（无二进制列时启用）
+    if ((kind_ == "mssql" || kind_ == "oracle") && !s.columns.empty()) {
+      bool has_bin = false;
+      for (const auto& c : s.columns) if (col_is_binary(c)) has_bin = true;
+      if (kind_ == "oracle" && has_bin) {
+        return oracle_stage_write(table, s, rows);
+      }
+      const bool bulk_ok = (kind_ == "mssql") ? bcp_ready() : sqlldr_ready();
+      if (!has_bin && bulk_ok) {
+        std::lock_guard<std::mutex> lk(bcp_mu_);
+        bcp_schema_[table] = s;
+        auto& buf = bcp_buf_[table];
+        buf.insert(buf.end(), rows.begin(), rows.end());
+        if (buf.size() >= 100000) {
+          Status st = flush_pending_locked(table);
+          if (!st.ok()) return st;
+        }
+        return Status::OK();
+      }
+    }
     OdbcWriter* w = writer();
     if (!w) return Status::Err(Code::kDb, "odbc target: worker connect failed");
     std::string cols;
@@ -708,9 +860,11 @@ class OdbcTarget : public OdbcConn, public ITarget {
       if (i) cols += ",";
       cols += qid(s.columns[i].name);
     }
+    // 字面量批量写入（每 2000 行一条语句）
+    const size_t kChunk = 1000;
     if (kind_ == "oracle") {
-      for (size_t start = 0; start < rows.size(); start += 500) {
-        const size_t end = std::min(rows.size(), start + 500);
+      for (size_t start = 0; start < rows.size(); start += kChunk) {
+        const size_t end = std::min(rows.size(), start + kChunk);
         std::string sql = "INSERT ALL ";
         for (size_t k = start; k < end; ++k) {
           sql += "INTO " + qid(table) + " (" + cols + ") VALUES (";
@@ -725,8 +879,8 @@ class OdbcTarget : public OdbcConn, public ITarget {
         if (!st.ok()) return st;
       }
     } else {
-      for (size_t start = 0; start < rows.size(); start += 500) {
-        const size_t end = std::min(rows.size(), start + 500);
+      for (size_t start = 0; start < rows.size(); start += kChunk) {
+        const size_t end = std::min(rows.size(), start + kChunk);
         std::string sql = "INSERT INTO " + qid(table) + " (" + cols + ") VALUES ";
         for (size_t k = start; k < end; ++k) {
           if (k > start) sql += ",";
@@ -743,6 +897,94 @@ class OdbcTarget : public OdbcConn, public ITarget {
     }
     std::lock_guard<std::mutex> lk(mu_);
     written_[table] += (int64_t)rows.size();
+    return Status::OK();
+  }
+
+  // Oracle 两段式装载：先写 VARCHAR2 暂存表（hex），再 TO_BLOB(HEXTORAW()) 转入目标
+  Status oracle_stage_write(const std::string& table, const TableSchema& s,
+                            const std::vector<Row>& rows) {
+    OdbcWriter* w = writer();
+    if (!w) return Status::Err(Code::kDb, "odbc target: worker connect failed");
+    const std::string stage = table + "__stg";
+    {
+      std::lock_guard<std::mutex> lk(stage_mu_);
+      if (!stage_ready_) {
+        w->exec("DROP TABLE " + qid(stage));
+        std::string ddl = "CREATE TABLE " + qid(stage) + " (\n";
+        for (size_t i = 0; i < s.columns.size(); ++i) {
+          const auto& c = s.columns[i];
+          ddl += "  " + qid(c.name) + " " +
+                 (col_is_binary(c) ? std::string("VARCHAR2(4000)") : map_type(c.src_type));
+          if (i + 1 < s.columns.size()) ddl += ",";
+          ddl += "\n";
+        }
+        ddl += ")";
+        Status st = w->exec(ddl);
+        if (!st.ok()) return st;
+        stage_ready_ = true;
+      }
+    }
+    std::string cols;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (i) cols += ",";
+      cols += qid(s.columns[i].name);
+    }
+    for (size_t start = 0; start < rows.size(); start += 1000) {
+      const size_t end = std::min(rows.size(), start + 1000);
+      std::string sql = "INSERT ALL ";
+      for (size_t k = start; k < end; ++k) {
+        sql += "INTO " + qid(stage) + " (" + cols + ") VALUES (";
+        for (size_t i = 0; i < rows[k].size(); ++i) {
+          if (i) sql += ",";
+          if (col_is_binary(s.columns[i]) && rows[k][i].type == ValType::kBytes)
+            sql += "'" + hex(rows[k][i].s) + "'";
+          else
+            sql += lit(rows[k][i]);
+        }
+        sql += ") ";
+      }
+      sql += "SELECT 1 FROM DUAL";
+      Status st = w->exec(sql);
+      if (!st.ok()) return st;
+    }
+    std::string sel;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (i) sel += ",";
+      sel += col_is_binary(s.columns[i])
+                 ? ("TO_BLOB(HEXTORAW(" + qid(s.columns[i].name) + "))")
+                 : qid(s.columns[i].name);
+    }
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      written_[table] += (int64_t)rows.size();
+    }
+    int64_t pending = 0;
+    {
+      std::lock_guard<std::mutex> lk(stage_mu_);
+      pending = (stage_pending_[table] += (int64_t)rows.size());
+    }
+    if (pending >= 100000) return oracle_copy_stage(table, s);
+    return Status::OK();
+  }
+
+  Status oracle_copy_stage(const std::string& table, const TableSchema& s) {
+    OdbcWriter* w = writer();
+    if (!w) return Status::Err(Code::kDb, "odbc target: worker connect failed");
+    const std::string stage = table + "__stg";
+    std::string cols, sel;
+    for (size_t i = 0; i < s.columns.size(); ++i) {
+      if (i) { cols += ","; sel += ","; }
+      cols += qid(s.columns[i].name);
+      sel += col_is_binary(s.columns[i])
+                 ? ("TO_BLOB(HEXTORAW(" + qid(s.columns[i].name) + "))")
+                 : qid(s.columns[i].name);
+    }
+    Status st = w->exec("INSERT INTO " + qid(table) + " (" + cols + ") SELECT " + sel +
+                        " FROM " + qid(stage));
+    if (!st.ok()) return st;
+    w->exec("TRUNCATE TABLE " + qid(stage));
+    std::lock_guard<std::mutex> lk(stage_mu_);
+    stage_pending_[table] = 0;
     return Status::OK();
   }
 
@@ -828,6 +1070,30 @@ class OdbcTarget : public OdbcConn, public ITarget {
   }
 
   Status commit() override {
+    {
+      std::lock_guard<std::mutex> lk(bcp_mu_);
+      for (auto& kv : bcp_buf_) {
+        if (!kv.second.empty()) {
+          Status st = flush_pending_locked(kv.first);
+          if (!st.ok()) return st;
+        }
+      }
+    }
+    if (kind_ == "oracle") {
+      std::vector<std::string> pts;
+      {
+        std::lock_guard<std::mutex> lk(stage_mu_);
+        for (auto& kv : stage_pending_)
+          if (kv.second > 0) pts.push_back(kv.first);
+      }
+      for (const auto& t : pts) {
+        auto sit = bcp_schema_.find(t);
+        if (sit != bcp_schema_.end()) {
+          Status st = oracle_copy_stage(t, sit->second);
+          if (!st.ok()) return st;
+        }
+      }
+    }
     std::lock_guard<std::mutex> lk(commit_mu_);
     if (!dbc_) return Status::Err(Code::kDb, "not connected");
     return SQLEndTran(SQL_HANDLE_DBC, dbc_, SQL_COMMIT) == SQL_SUCCESS
@@ -843,7 +1109,26 @@ class OdbcTarget : public OdbcConn, public ITarget {
                : Status::Err(Code::kDb, "odbc rollback failed");
   }
 
-  void close() override { disconnect(); }
+  void close() override {
+    {
+      std::lock_guard<std::mutex> lk(bcp_mu_);
+      for (auto& kv : bcp_buf_)
+        if (!kv.second.empty()) flush_pending_locked(kv.first);
+    }
+    if (kind_ == "oracle") {
+      std::vector<std::string> pending;
+      {
+        std::lock_guard<std::mutex> lk(stage_mu_);
+        for (auto& kv : stage_pending_)
+          if (kv.second > 0) pending.push_back(kv.first);
+      }
+      for (const auto& t : pending) {
+        auto sit = bcp_schema_.find(t);
+        if (sit != bcp_schema_.end()) oracle_copy_stage(t, sit->second);
+      }
+    }
+    disconnect();
+  }
 
   int64_t written(const std::string& table) override {
     std::lock_guard<std::mutex> lk(mu_);
@@ -872,6 +1157,235 @@ class OdbcTarget : public OdbcConn, public ITarget {
     return raw;
   }
 
+  bool bcp_ready() const {
+    static const bool ok = [] {
+      const char* e = std::getenv("MIG_BCP");
+      if (e && *e && access(e, X_OK) == 0) return true;
+      std::string home = std::getenv("HOME") ? std::getenv("HOME") : "";
+      std::string cand = home + "/msodbc/tools/root/opt/mssql-tools18/bin/bcp";
+      if (access(cand.c_str(), X_OK) == 0) return true;
+      if (system("command -v bcp >/dev/null 2>&1") == 0) return true;
+      return false;
+    }();
+    return ok;
+  }
+
+  std::string bcp_bin() const {
+    if (!providers().bcp_path.empty() && access(providers().bcp_path.c_str(), X_OK) == 0)
+      return providers().bcp_path;
+    const char* e = std::getenv("MIG_BCP");
+    if (e && *e && access(e, X_OK) == 0) return e;
+    std::string home = std::getenv("HOME") ? std::getenv("HOME") : "";
+    std::string cand = home + "/msodbc/tools/root/opt/mssql-tools18/bin/bcp";
+    if (access(cand.c_str(), X_OK) == 0) return cand;
+    return "bcp";
+  }
+
+  static std::string raw_text(const Value& v) {
+    switch (v.type) {
+      case ValType::kNull: return std::string();
+      case ValType::kInt: return std::to_string(v.i);
+      case ValType::kBool: return v.b ? "1" : "0";
+      case ValType::kDouble: {
+        std::ostringstream o;
+        o << std::setprecision(17) << v.d;
+        return o.str();
+      }
+      default: return v.s;
+    }
+  }
+
+  bool sqlldr_ready() const {
+    static const bool ok = [] {
+      const char* e = std::getenv("MIG_SQLLDR");
+      if (e && *e && access(e, X_OK) == 0) return true;
+      std::string home = std::getenv("HOME") ? std::getenv("HOME") : "";
+      std::string cand = home + "/oracle-ic/instantclient_23_26/sqlldr";
+      if (access(cand.c_str(), X_OK) == 0) return true;
+      if (system("command -v sqlldr >/dev/null 2>&1") == 0) return true;
+      return false;
+    }();
+    return ok;
+  }
+
+  std::string sqlldr_bin() const {
+    if (!providers().sqlldr_path.empty() && access(providers().sqlldr_path.c_str(), X_OK) == 0)
+      return providers().sqlldr_path;
+    const char* e = std::getenv("MIG_SQLLDR");
+    if (e && *e && access(e, X_OK) == 0) return e;
+    std::string home = std::getenv("HOME") ? std::getenv("HOME") : "";
+    std::string cand = home + "/oracle-ic/instantclient_23_26/sqlldr";
+    if (access(cand.c_str(), X_OK) == 0) return cand;
+    return "sqlldr";
+  }
+
+  Status flush_pending_locked(const std::string& table) {
+    return kind_ == "mssql" ? flush_bcp_locked(table) : flush_sqlldr_locked(table);
+  }
+
+  // 调用方必须持有 bcp_mu_
+  Status flush_sqlldr_locked(const std::string& table) {
+    auto it = bcp_buf_.find(table);
+    if (it == bcp_buf_.end() || it->second.empty()) return Status::OK();
+    auto sit = bcp_schema_.find(table);
+    if (sit == bcp_schema_.end()) return Status::Err(Code::kDb, "sqlldr: schema missing");
+    const TableSchema& s = sit->second;
+    const std::string host = dsn_get(opts_.target, "host", "127.0.0.1");
+    const std::string port = dsn_get(opts_.target, "port", "1521");
+    const std::string user = dsn_get(opts_.target, "user", "");
+    const std::string pass = resolve_secret(dsn_get(opts_.target, "password", ""));
+    const std::string db = dsn_get(opts_.target, "db", "");
+    if (db.empty()) return Status::Err(Code::kInvalid, "sqlldr: target service name is empty");
+
+    static std::atomic<uint64_t> seq{0};
+    const std::string base = std::filesystem::temp_directory_path().string() + "/mig_ld_" +
+                             std::to_string((long long)getpid()) + "_" + table + "_" +
+                             std::to_string((unsigned long long)seq.fetch_add(1));
+    const std::string data = base + ".dat";
+    const std::string ctl = base + ".ctl";
+    const std::string log = base + ".log";
+    const std::string bad = base + ".bad";
+    const std::string pwfile = base + ".pw";
+    {
+      std::ofstream pf(pwfile);
+      pf << pass << "\n";
+    }
+    std::filesystem::permissions(pwfile,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
+
+    {
+      std::ofstream f(data, std::ios::binary | std::ios::trunc);
+      if (!f) return Status::Err(Code::kIO, "sqlldr: cannot write " + data);
+      for (const auto& row : it->second) {
+        for (size_t i = 0; i < row.size(); ++i) {
+          if (i) f << '\t';
+          if (i < s.columns.size() && col_is_binary(s.columns[i]) && row[i].type == ValType::kBytes)
+            f << hex(row[i].s);
+          else
+            f << raw_text(row[i]);
+        }
+        f << '\n';
+      }
+    }
+    {
+      std::ofstream c(ctl, std::ios::trunc);
+      if (!c) return Status::Err(Code::kIO, "sqlldr: cannot write " + ctl);
+      c << "LOAD DATA\nINFILE '" << data << "'\nAPPEND INTO TABLE \"" << table << "\"\n";
+      c << "FIELDS TERMINATED BY X'09'\nTRAILING NULLCOLS\n(\n";
+      for (size_t i = 0; i < s.columns.size(); ++i) {
+        const std::string t = lower_ascii(s.columns[i].src_type);
+        c << "  \"" << s.columns[i].name << "\"";
+        if (col_is_binary(s.columns[i])) { c << " \"TO_BLOB(HEXTORAW(:" << s.columns[i].name << "))\""; if (i + 1 < s.columns.size()) c << ","; c << "\n"; continue; }
+        if (t.find("timestamp") != std::string::npos)
+          c << " TIMESTAMP \"YYYY-MM-DD HH24:MI:SS.FF\"";
+        else if (t.find("date") != std::string::npos)
+          c << " DATE \"YYYY-MM-DD HH24:MI:SS\"";
+        if (i + 1 < s.columns.size()) c << ",";
+        c << "\n";
+      }
+      c << ")\n";
+    }
+    std::string qpass;
+    for (char ch : pass) {
+      if (ch == '\'') qpass += "'\\''";
+      else qpass += ch;
+    }
+    bool any_bin = false;
+    for (const auto& c : s.columns) if (col_is_binary(c)) any_bin = true;
+    const std::string direct = any_bin ? "false" : "true";
+    const std::string cmd = sqlldr_bin() + " \"userid=" + user + "/" + pass + "@//" + host +
+                            ":" + port + "/" + db + "\" control=\"" + ctl + "\" log=\"" + log +
+                            "\" bad=\"" + bad + "\" direct=" + direct + " errors=0 >/dev/null 2>&1";
+    const int rc = system(cmd.c_str());
+    const int64_t n = (int64_t)it->second.size();
+    it->second.clear();
+    if (rc != 0) {
+      std::string err;
+      std::ifstream lf(log);
+      if (lf) {
+        std::ostringstream ss;
+        ss << lf.rdbuf();
+        err = ss.str();
+        if (err.size() > 400) err = err.substr(err.size() - 400);
+      }
+      std::remove(data.c_str());
+      std::remove(ctl.c_str());
+      std::remove(bad.c_str());
+      return Status::Err(Code::kDb, "sqlldr failed (" + std::to_string(rc) + "): " + err);
+    }
+    std::remove(data.c_str());
+    std::remove(ctl.c_str());
+    std::remove(bad.c_str());
+    std::lock_guard<std::mutex> lk(mu_);
+    written_[table] += n;
+    return Status::OK();
+  }
+
+  // 调用方必须持有 bcp_mu_
+  Status flush_bcp_locked(const std::string& table) {
+    auto it = bcp_buf_.find(table);
+    if (it == bcp_buf_.end() || it->second.empty()) return Status::OK();
+    const std::string host = dsn_get(opts_.target, "host", "127.0.0.1");
+    const std::string port = dsn_get(opts_.target, "port", "1433");
+    const std::string user = dsn_get(opts_.target, "user", "sa");
+    const std::string pass = resolve_secret(dsn_get(opts_.target, "password", ""));
+    const std::string db = dsn_get(opts_.target, "db", "");
+    if (db.empty()) return Status::Err(Code::kInvalid, "bcp: target db is empty");
+
+    static std::atomic<uint64_t> seq{0};
+    const std::string path = std::filesystem::temp_directory_path().string() +
+                             "/mig_bcp_" + std::to_string((long long)getpid()) + "_" + table + "_" +
+                             std::to_string((unsigned long long)seq.fetch_add(1)) + ".tsv";
+    {
+      std::ofstream f(path, std::ios::binary | std::ios::trunc);
+      if (!f) return Status::Err(Code::kIO, "bcp: cannot write " + path);
+      for (const auto& row : it->second) {
+        for (size_t i = 0; i < row.size(); ++i) {
+          if (i) f << '\t';
+          f << raw_text(row[i]);
+        }
+        f << '\n';
+      }
+    }
+
+    std::string qpass;
+    for (char c : pass) {
+      if (c == '\'') qpass += "'\\''";
+      else qpass += c;
+    }
+    const std::string errfile = path + ".err";
+    const std::string pwfile = path + ".pw";
+    {
+      std::ofstream pf(pwfile);
+      pf << pass << "\n";
+    }
+    std::filesystem::permissions(pwfile,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
+    std::string cmd = bcp_bin() + " \"" + "dbo." + table + "\" in \"" + path +
+                      "\" -c -t \"\\t\" -r \"\\n\" -S " + host + "," + port +
+                      " -U " + user + " -d " + db +
+                      " -u -b 100000 -h \"TABLOCK\" -e \"" + errfile +
+                      "\" < \"" + pwfile + "\" >/dev/null 2>&1";
+    const int rc = system(cmd.c_str());
+    const int64_t n = (int64_t)it->second.size();
+    it->second.clear();
+    if (rc != 0) {
+      std::string err;
+      std::ifstream ef(errfile);
+      if (ef) { std::ostringstream ss; ss << ef.rdbuf(); err = ss.str(); }
+      std::remove(path.c_str());
+      std::remove(errfile.c_str());
+      return Status::Err(Code::kDb, "bcp load failed (" + std::to_string(rc) + "): " + err.substr(0, 300));
+    }
+    std::remove(path.c_str());
+    std::remove(errfile.c_str());
+    std::lock_guard<std::mutex> lk(mu_);
+    written_[table] += n;
+    return Status::OK();
+  }
+
   // NULL 字面量需要显式类型，否则 Oracle 的 SELECT ... FROM dual 会给出
   // CHAR(0)，MERGE 时报 ORA-00932。
   std::string typed_lit(const Value& v, const ColumnDef& c) const {
@@ -884,6 +1398,12 @@ class OdbcTarget : public OdbcConn, public ITarget {
   std::map<std::string, TableSchema> schemas_;
   std::map<std::string, int64_t> written_;
   std::mutex mu_;
+  std::map<std::string, std::vector<Row>> bcp_buf_;
+  std::map<std::string, TableSchema> bcp_schema_;
+  std::mutex bcp_mu_;
+  bool stage_ready_ = false;
+  std::map<std::string, int64_t> stage_pending_;
+  std::mutex stage_mu_;
   std::mutex schema_mu_;
   std::mutex commit_mu_;
 };

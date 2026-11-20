@@ -1,0 +1,11 @@
+Package: mini-migrator
+Version: 0.9.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: bellgrell <bellgrell@localhost>
+Depends: libmysqlclient21, libpq5, libodbc2, libodbcinst2, unixodbc-common, libssl3t64 | libssl3
+Recommends: unixodbc, msodbcsql18
+Description: Heterogeneous database migration tool
+ MySQL/PostgreSQL/openGauss/SQL Server/Oracle migration with
+ bulk-load channels (bcp, sqlldr), CDC and verification.

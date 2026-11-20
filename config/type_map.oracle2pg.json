@@ -1,0 +1,33 @@
+{
+  "global": {
+    "number": "numeric{args}",
+    "numeric": "numeric{args}",
+    "decimal": "numeric{args}",
+    "integer": "integer",
+    "int": "integer",
+    "smallint": "smallint",
+    "float": "double precision",
+    "binary_float": "real",
+    "binary_double": "double precision",
+    "varchar2": "varchar{args}",
+    "nvarchar2": "varchar{args}",
+    "varchar": "varchar{args}",
+    "char": "char{args}",
+    "nchar": "char{args}",
+    "clob": "text",
+    "nclob": "text",
+    "long": "text",
+    "blob": "bytea",
+    "raw": "bytea",
+    "long raw": "bytea",
+    "date": "timestamp",
+    "timestamp": "timestamp",
+    "timestamp with time zone": "timestamptz",
+    "timestamp with local time zone": "timestamp",
+    "interval day to second": "text",
+    "interval year to month": "text",
+    "xmltype": "xml",
+    "rowid": "text"
+  },
+  "columns": {}
+}

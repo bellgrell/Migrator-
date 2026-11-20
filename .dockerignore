@@ -1,0 +1,8 @@
+build/
+out/
+dist/
+archive/
+.git/
+*.deb
+*.tar.gz
+.DS_Store

@@ -38,6 +38,8 @@ add_library(migrator_core STATIC
   src/metrics.cpp
   src/mmv_verify.cpp
   src/module.cpp
+  src/doctor.cpp
+  src/providers.cpp
   src/pg_dialect.cpp
   src/pipeline.cpp
   src/type_system.cpp
@@ -142,6 +144,8 @@ endif()
 
 add_executable(migrator src/main.cpp)
 target_link_libraries(migrator PRIVATE migrator_core)
+target_compile_definitions(migrator PRIVATE
+  MIG_ENABLE_PG_CDC MIG_ENABLE_REPAIR MIG_ENABLE_METRICS MIG_ENABLE_SNAPSHOT MIG_ENABLE_RESUME)
 
 include(GNUInstallDirs)
 install(TARGETS migrator RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

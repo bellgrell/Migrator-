@@ -16,6 +16,7 @@
 #include "http.h"
 #include "platform.h"
 #include "migrator.h"
+#include "doctor.h"
 #include "type_system.h"
 #include "config_validator.h"
 #include "module.h"
@@ -212,6 +213,10 @@ std::string fmt_num(int64_t v) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1) {
+    const std::string cmd = argv[1];
+    if (cmd == "doctor" || cmd == "--doctor") return mig::run_doctor();
+  }
   mig::Options o;
   mig::load_verify_config("config/verify.json", o);
   bool exit_after = false;
@@ -555,6 +560,16 @@ int main(int argc, char** argv) {
       o.target_kind == "mysql")
     o.type_map_path = "config/type_map.oracle2mysql.json";
 
+  if (!type_map_explicit && o.source_kind == "mssql" &&
+      (o.target_kind == "pg" || o.target_kind == "og"))
+    o.type_map_path = "config/type_map.mssql2pg.json";
+  if (!type_map_explicit && o.source_kind == "oracle" &&
+      (o.target_kind == "pg" || o.target_kind == "og"))
+    o.type_map_path = "config/type_map.oracle2pg.json";
+  if (!type_map_explicit && o.source_kind == "oracle" &&
+      o.target_kind == "mssql")
+    o.type_map_path = "config/type_map.oracle2mssql.json";
+
   mig::TypeMap tm;
   mig::Status st = tm.load(o.type_map_path);
   if (!st.ok()) {
@@ -813,7 +828,24 @@ int main(int argc, char** argv) {
   std::printf("========================================\n");
   std::fflush(stdout);
 
+  if (rc.ok()) {
+    const int64_t done = m.rows_done.load();
+    const int64_t total = m.rows_total.load();
+    if (m.errors.load() > 0) {
+      std::fprintf(stderr, "[fatal] migration finished with %lld error(s)\n",
+                   (long long)m.errors.load());
+      rc = mig::Status::Err(mig::Code::kDb, "migration finished with errors");
+    } else if (done == 0 && total > 0) {
+      std::fprintf(stderr, "[fatal] no rows migrated (expected %lld)\n",
+                   (long long)total);
+      rc = mig::Status::Err(mig::Code::kDb, "no rows migrated");
+    }
+  }
+
   if (!rc.ok()) std::fprintf(stderr, "[error] %s\n", rc.str().c_str());
+
+  // 退出前关闭目标端，确保暂存表尾批数据被转换（两段式装载）
+  if (tgt) tgt->close();
 
   if (exit_after) {
     std::fflush(nullptr);

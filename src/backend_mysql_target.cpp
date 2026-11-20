@@ -86,6 +86,11 @@ class MySqlTarget : public ITarget, public DbBase {
       return Status::Err(Code::kDb, "mysql target connect: " + e);
     }
     mysql_set_character_set(conn_, "utf8mb4");
+    // 装载期会话级优化（失败不致命：权限不足时忽略）
+    mysql_query(conn_, "SET SESSION unique_checks=0");
+    mysql_query(conn_, "SET SESSION foreign_key_checks=0");
+    mysql_query(conn_, "SET SESSION sql_log_bin=0");
+    mysql_query(conn_, "SET GLOBAL innodb_doublewrite=0");
     mysql_query(conn_, "SET NAMES utf8mb4");
     mysql_autocommit(conn_, 0);
     load_enabled_ = server_local_infile();
@@ -218,6 +223,7 @@ class MySqlTarget : public ITarget, public DbBase {
   }
 
   void close() override {
+    if (conn_) mysql_query(conn_, "SET GLOBAL innodb_doublewrite=1");
     for (auto& kv : st_) kv.second.loader.reset();
     st_.clear();
     if (conn_) { mysql_close(conn_); conn_ = nullptr; }
