@@ -2,7 +2,7 @@
 
 **English** | [中文](README.zh.md) | [Русский](README.ru.md)
 
-A C++17 heterogeneous data migration tool for **MySQL, PostgreSQL and openGauss**. It supports full-load migration in multiple directions, row-count and checksum verification, and CDC (change data capture) from MySQL binlog to PostgreSQL/openGauss.
+A C++17 heterogeneous data migration tool for MySQL, PostgreSQL, openGauss, SQL Server and Oracle. It supports full-load migration in multiple directions, row-count and checksum verification, CDC (change data capture) from MySQL binlog, and optional bulk-load channels (bcp for SQL Server, sqlldr for Oracle).
 
 The built-in web dashboard supports **Chinese / English / Russian** and can be switched in the top-right corner.
 
@@ -17,6 +17,15 @@ The built-in web dashboard supports **Chinese / English / Russian** and can be s
 | `og2pg` | openGauss | PostgreSQL | Full load + verification |
 | `og2mysql` | openGauss | MySQL | Full load + verification |
 | `mysql2mysql` | MySQL | MySQL | Full load + verification |
+| mysql2mssql | MySQL | SQL Server | Full load (bcp channel) |
+| mssql2mysql | SQL Server | MySQL | Full load |
+| mssql2mssql | SQL Server | SQL Server | Full load (bcp) |
+| mysql2oracle | MySQL | Oracle | Full load (sqlldr channel) |
+| oracle2mysql | Oracle | MySQL | Full load |
+| oracle2oracle | Oracle | Oracle | Full load (sqlldr) |
+
+Other source/target pairs can be combined with --source-type / --target-type
+(for example --mode mysql2pg --source-type oracle --target-type pg).
 
 CDC is currently available only with a MySQL source (MySQL binlog).
 
@@ -42,6 +51,52 @@ CMake is also supported:
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
+
+### ODBC prerequisites (SQL Server / Oracle)
+
+ODBC targets and sources need unixODBC plus the vendor driver:
+
+* SQL Server: ODBC Driver 18 for SQL Server (msodbcsql18), optional bcp from mssql-tools18
+* Oracle: Oracle Instant Client (Basic + ODBC + Tools), optional sqlldr
+
+Dependency names, registration and troubleshooting are documented in
+[docs/dependencies.md](docs/dependencies.md). Verify an installation with:
+
+    ./build/migrator doctor
+
+Driver names and bulk-loader paths can be configured in config/providers.ini
+(or via MIG_MSSQL_DRIVER, MIG_ORACLE_DRIVER, MIG_BCP, MIG_SQLLDR).
+
+### Bulk-load channels
+
+For SQL Server and Oracle targets the tool can hand a batch to the vendor loader
+instead of inserting row by row. Both channels are optional: if bcp or sqlldr is
+missing, the tool falls back to plain SQL inserts.
+
+Measured on 5.05M rows / 7 tables (Ubuntu, Docker databases):
+
+| Target | Channel | Time | Throughput |
+|---|---|---|---|
+| SQL Server | bcp | 35.8 s | 8.8 MB/s |
+| SQL Server | INSERT (fallback) | 233 s | 1.3 MB/s |
+| Oracle | sqlldr | 133.7 s | 2.4 MB/s |
+| Oracle | INSERT ALL (fallback) | 1285 s | 0.2 MB/s |
+
+Oracle BLOB tables are loaded in two stages: hex text into a staging table,
+then TO_BLOB(HEXTORAW(...)) into the target.
+
+### Packaging
+
+    # Debian/Ubuntu package
+    bash packaging/build-deb.sh
+    sudo dpkg -i mini-migrator_0.9.0_amd64.deb
+
+    # Self-contained image (msodbc18 + Instant Client + bcp/sqlldr)
+    docker build -t mini-migrator:full -f packaging/Dockerfile .
+    docker run --rm mini-migrator:full doctor
+
+The package installs /usr/bin/mini-migrator and /etc/mini-migrator/providers.ini;
+the image passes the same doctor checks.
 
 ## Security and operations
 
@@ -80,7 +135,7 @@ cmake --build build -j
 
 `./build/migrator --features` lists the compiled modules: `pg_cdc`, `repair`, `metrics`, `snapshot`, `resume`.
 
-The core binary still depends only on `libmysqlclient` and `libpq`.
+The core binary depends on libmysqlclient and libpq; ODBC support is optional and detected at build time.
 
 For a minimal build run `make lite` (core only); `make full` restores all modules. Compiled modules can also be disabled at runtime without rebuilding: `--disable-modules pg_cdc,repair,...`. The web dashboard only displays module status; toggling there would require a job-control UI.
 
