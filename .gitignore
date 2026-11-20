@@ -13,7 +13,9 @@ _install/
 build-cmake/
 
 # internal docs and benchmark artifacts (kept locally)
-docs/
+docs/*
+!docs/usage.md
+!docs/dependencies.md
 bench/
 archive/
 
@@ -24,3 +26,7 @@ qt/*.o
 qt/moc_*.cpp
 qt/migrator_gui.app/
 qt/build/
+
+# build artifacts
+*.deb
+packaging/debian/

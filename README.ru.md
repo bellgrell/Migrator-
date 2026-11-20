@@ -2,212 +2,154 @@
 
 [English](README.md) | [中文](README.zh.md) | **Русский**
 
-Инструмент гетерогенной миграции данных на C++17 для **MySQL, PostgreSQL и openGauss**. Поддерживает полную миграцию в нескольких направлениях, проверку количества строк и контрольных сумм, а также CDC (change data capture) из binlog MySQL в PostgreSQL/openGauss.
+Инструмент гетерогенной миграции баз данных на C++17 для **MySQL, PostgreSQL,
+openGauss, SQL Server и Oracle**. Поддерживает полную миграцию в нескольких
+направлениях, сверку количества строк и контрольных сумм, CDC; SQL Server и
+Oracle подключаются через ODBC и могут использовать штатные загрузчики
+(`bcp`, `sqlldr`).
 
-Встроенная веб-панель поддерживает **中文 / English / Русский**; язык переключается в правом верхнем углу.
+## Возможности
+
+- 13 штатных направлений миграции по пяти СУБД; остальные пары через `--source-type` / `--target-type`
+- Сверка количества строк и контрольных сумм (FNV или дайджест mmv)
+- Массовая загрузка: `bcp` для SQL Server, `sqlldr` для Oracle (при отсутствии - обычные INSERT)
+- Двухэтапная загрузка таблиц Oracle с `BLOB` (промежуточная таблица + `TO_BLOB`)
+- CDC из binlog MySQL и логической репликации PostgreSQL, опциональная синхронизация DDL
+- Докачка по водяному знаку первичного ключа, параллелизм по диапазонам ключа
+- Веб-панель (китайский / английский / русский), журнал аудита, TLS
+- Самопроверка `doctor`: клиентские библиотеки, драйверы ODBC, загрузчики
+- Пакет Debian и самодостаточный Docker-образ
 
 ## Поддерживаемые направления
 
-| Режим | Источник | Цель | Статус |
+| Режим | Источник | Приёмник | Примечание |
 |---|---|---|---|
-| `mysql2pg` | MySQL | PostgreSQL | Полная миграция + проверка |
-| `mysql2og` | MySQL | openGauss | Полная миграция + проверка |
-| `pg2mysql` | PostgreSQL | MySQL | Полная миграция + проверка |
-| `pg2og` | PostgreSQL | openGauss | Полная миграция + проверка |
-| `og2pg` | openGauss | PostgreSQL | Полная миграция + проверка |
-| `og2mysql` | openGauss | MySQL | Полная миграция + проверка |
-| `mysql2mysql` | MySQL | MySQL | Полная миграция + проверка |
+| `mysql2pg` | MySQL | PostgreSQL | полная загрузка + сверка |
+| `mysql2og` | MySQL | openGauss | полная загрузка + сверка |
+| `pg2mysql` | PostgreSQL | MySQL | полная загрузка + сверка |
+| `pg2og` | PostgreSQL | openGauss | полная загрузка + сверка |
+| `og2pg` | openGauss | PostgreSQL | полная загрузка + сверка |
+| `og2mysql` | openGauss | MySQL | полная загрузка + сверка |
+| `mysql2mysql` | MySQL | MySQL | полная загрузка + сверка |
+| `mysql2mssql` | MySQL | SQL Server | канал `bcp` |
+| `mssql2mysql` | SQL Server | MySQL | полная загрузка |
+| `mssql2mssql` | SQL Server | SQL Server | канал `bcp` |
+| `mysql2oracle` | MySQL | Oracle | канал `sqlldr` |
+| `oracle2mysql` | Oracle | MySQL | полная загрузка |
+| `oracle2oracle` | Oracle | Oracle | канал `sqlldr` |
 
-CDC в настоящее время поддерживается только для источника MySQL (binlog).
-
-## Сборка
-
-Требования: компилятор C++17, libmysqlclient, libpq.
+Другие пары задаются переопределением типов, например:
 
 ```bash
-make
-./build/migrator --help
+./build/migrator --mode mysql2pg --source-type oracle --target-type pg ...
+```
+
+## Быстрый старт
+
+### Сборка
+
+```bash
+sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+  libmysqlclient-dev libpq-dev unixodbc-dev libssl-dev
+make -j4            # или: cmake -S . -B build -G Ninja && cmake --build build -j
 ```
 
 macOS:
 
 ```bash
-brew install mysql-client libpq
-make
+brew install mysql-client libpq unixodbc openssl@3
+make -j4
 ```
 
-Также поддерживается CMake:
+### Проверка окружения
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+./build/migrator doctor
 ```
 
-## Модули
+`doctor` проверяет клиентские библиотеки, зарегистрированные драйверы ODBC,
+`bcp` и `sqlldr`; ненулевой код возврата только при серьёзных ошибках. Имена
+драйверов и пути задаются в `config/providers.ini` (или `MIG_MSSQL_DRIVER`,
+`MIG_ORACLE_DRIVER`, `MIG_BCP`, `MIG_SQLLDR`). Подробнее:
+[docs/dependencies.md](docs/dependencies.md).
 
-Дополнительные модули включены по умолчанию и могут быть отключены при сборке:
-
-```bash
-make WITH_PG_CDC=0 WITH_REPAIR=0
-# или через CMake:
-cmake -B build -DMIG_ENABLE_PG_CDC=OFF -DMIG_ENABLE_REPAIR=OFF
-cmake --build build -j
-```
-
-`./build/migrator --features` показывает включённые модули: `pg_cdc`, `repair`, `metrics`, `snapshot`, `resume`.
-
-Базовый бинарник по-прежнему зависит только от `libmysqlclient` и `libpq`.
-
-Минимальная сборка: `make lite` (только ядро), `make full` — все модули. Включённые модули можно отключить во время выполнения без пересборки: `--disable-modules pg_cdc,repair,...`. Веб-панель только показывает статус; переключение в интерфейсе требует панели управления заданиями.
-
-Веб-панель показывает включённые модули и их статус; переключатели задаются при сборке, для изменения нужна пересборка.
-
-## Быстрый старт
-
-MySQL → PostgreSQL:
+### Запуск миграции
 
 ```bash
 ./build/migrator --mode mysql2pg \
-  --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
-  --target 'host=127.0.0.1;port=5432;user=postgres;db=demo_dst' \
-  --batch 2000 --workers 4 --exit
+  --source "host=127.0.0.1;port=3306;user=root;password=...;db=demo" \
+  --target "host=127.0.0.1;port=5432;user=postgres;password=...;db=demo_dst" \
+  --batch 5000 --workers 4 --truncate --exit
 ```
 
-MySQL → openGauss:
+Для SQL Server драйвер указывается в DSN:
 
 ```bash
-# сначала создайте целевую БД в режиме совместимости с PG
-# CREATE DATABASE demo_dst WITH ENCODING='UTF8' DBCOMPATIBILITY='PG';
-
-./build/migrator --mode mysql2og \
-  --source 'host=127.0.0.1;port=3306;user=root;db=demo' \
-  --target 'host=127.0.0.1;port=15432;user=gaussdb;db=demo_dst' \
-  --batch 2000 --workers 4 --exit
+--target "host=127.0.0.1;port=1433;user=sa;password=...;db=demo_dst;driver=ODBC Driver 18 for SQL Server"
 ```
 
-PostgreSQL → MySQL:
+## Каналы массовой загрузки
+
+Если доступны `bcp` или `sqlldr`, пакет целиком передаётся штатному загрузчику;
+иначе выполняется обычная вставка SQL.
+
+Замер на 5,05 млн строк / 7 таблиц (Ubuntu, базы в Docker):
+
+| Приёмник | Канал | Время | Пропускная способность |
+|---|---|---|---|
+| SQL Server | `bcp` | 35,8 с | 8,8 МБ/с |
+| SQL Server | INSERT | 233 с | 1,3 МБ/с |
+| Oracle | `sqlldr` | 133,7 с | 2,4 МБ/с |
+| Oracle | INSERT ALL | 1285 с | 0,2 МБ/с |
+
+Колонки `BLOB` в Oracle загружаются в два этапа: шестнадцатеричный текст во
+промежуточную таблицу, затем `TO_BLOB(HEXTORAW(...))` в целевую таблицу.
+
+## Сборка пакетов
 
 ```bash
-# для массовой загрузки в MySQL требуется local_infile=ON
-# SET GLOBAL local_infile=1;
+# Пакет Debian/Ubuntu
+bash packaging/build-deb.sh
+sudo dpkg -i mini-migrator_0.9.0_amd64.deb
 
-./build/migrator --mode pg2mysql \
-  --source 'host=127.0.0.1;port=5432;user=postgres;db=demo' \
-  --target 'host=127.0.0.1;port=3306;user=root;db=demo_mysql' \
-  --batch 2000 --workers 4 --exit
+# Самодостаточный образ (msodbcsql18 + Instant Client + bcp/sqlldr)
+docker build -t mini-migrator:full -f packaging/Dockerfile .
+docker run --rm mini-migrator:full doctor
 ```
 
-Веб-панель по умолчанию доступна по адресу `http://127.0.0.1:8123/`. Добавьте `--exit`, чтобы завершить процесс после миграции; иначе он продолжит отдавать панель.
+Пакет устанавливает `/usr/bin/mini-migrator` и
+`/etc/mini-migrator/providers.ini`.
 
 ## Основные параметры
 
 | Параметр | По умолчанию | Описание |
 |---|---|---|
-| `--mode` | `sim` | Режим миграции (см. таблицу выше) |
-| `--source` | — | DSN источника |
-| `--target` | — | DSN цели |
-| `--batch` | 1000 | Строк в пакете |
-| `--commit` | 10 | Коммит каждые N пакетов |
-| `--workers` | 1 | Параллельные потоки (по таблицам и по диапазонам первичного ключа) |
-| `--port` | 8123 | Порт веб-панели |
-| `--no-verify` | выкл. | Пропустить проверку строк и контрольных сумм |
-| `--no-checksum` | выкл. | Сравнивать только количество строк |
-| `--with-views` | выкл. | Мигрировать представления (MySQL ↔ PG/openGauss; PG→MySQL — механическая конвертация) |
-| `--cdc` | выкл. | Продолжить CDC после полной миграции |
-| `--cdc-only` | выкл. | Запустить только CDC |
-| `--cdc-ddl` | выкл. | Применять DDL-изменения из binlog |
-| `--exit` | выкл. | Выйти после миграции |
-| `--connect-timeout` | 10 | Таймаут подключения/чтения/записи, секунды |
-| `--connect-retries` | 3 | Число повторных попыток подключения |
-| `--truncate` | выкл. | Удалить целевые таблицы перед миграцией (безопасный перезапуск) |
-| `--sslmode` | prefer | sslmode для PostgreSQL/openGauss |
-| `--mysql-ssl-mode` | PREFERRED | SSL-режим MySQL: DISABLED/PREFERRED/REQUIRED |
-| `--cdc-retries` | 10 | Число переподключений CDC |
-| `--cdc-slot` | migrator_slot | Имя слота логической репликации для PostgreSQL CDC |
-| `--repair` | выкл. | После проверки добавить недостающие и удалить лишние строки по первичному ключу |
-| `--only-tables` | — | Мигрировать только указанные таблицы (через запятую) |
-| `--exclude-tables` | — | Исключить указанные таблицы |
-| `--consistent-snapshot` | выкл. | Согласованный снимок (MySQL: позиция binlog; PG/openGauss: REPEATABLE READ), workers=1 |
-| `--resume` | выкл. | Продолжить полную миграцию с позиции первичного ключа |
-| `--resume-dir` | out/resume | Каталог контрольных точек |
-| `--load-mode` | auto | Режим LOAD DATA для MySQL: auto/insert/ignore/replace |
-| `--io-scheduler` | `fair` | Планирование пакетного I/O: `off` / `fair` / `scan` |
-| `--io-queue-depth` | 0 | Одновременных чтений пакетов (0 = workers) |
-| `--io-prefetch` | 0 | Пакетов упреждающего чтения на диапазон (0 = выкл.) |
-| `--io-window` | 0 | Окно диапазонов для SCAN (0 = авто) |
+| `--mode` | `sim` | режим миграции (таблица выше) |
+| `--source` / `--target` | - | DSN: `host=;port=;user=;password=;db=` |
+| `--batch` | 1000 | строк в пакете |
+| `--commit` | 10 | коммит каждые N пакетов |
+| `--workers` | 1 | число потоков и параллелизм по диапазонам ключа |
+| `--truncate` | выкл | очистить целевые таблицы перед загрузкой |
+| `--no-verify` | выкл | пропустить сверку строк и контрольных сумм |
+| `--resume` / `--resume-dir` | выкл | докачка по водяному знаку ключа |
+| `--cdc` | выкл | применять изменения после полной загрузки |
+| `--with-views` | выкл | переносить представления (где поддерживается) |
+| `--port` | 8123 | порт веб-панели |
 
-Формат DSN: `host=...;port=...;user=...;password=...;db=...`.
+## Документация
 
-### Планирование I/O
-
-`--io-scheduler fair` (по умолчанию) выдаёт чтения диапазонам по очереди FIFO и ограничивает число одновременных чтений, чтобы один диапазон не монополизировал источник; `scan` допускает только диапазоны внутри скользящего окна первичного ключа — подходит для таблиц, кластеризованных по ключу; `off` отключает планирование. `--io-prefetch` добавляет буфер упреждающего чтения на диапазон (чтение и запись перекрываются); по умолчанию выключен, так как для удалённых БД обычно не даёт выигрыша. Планировщик управляет только клиентскими чтениями; физическим планированием диска по-прежнему занимаются ОС и движок БД.
-
-## Производительность
-
-Набор данных: 5,110,000 строк в трёх таблицах (5,000,000 строк с целочисленным первичным ключом, 100,000 с составным ключом, 10,000 без ключа). Размер пакета 2000, 4 потока, включены проверка количества строк и контрольных сумм. Время включает проверку.
-
-| Направление | Строк | Время | Пропускная способность |
-|---|---:|---:|---:|
-| MySQL → openGauss | 7,110,000 | 15.43 s | 460,836 rows/s |
-| MySQL → PostgreSQL | 5,110,000 | 12.42 s | 411,287 rows/s |
-| MySQL → MySQL | 5,110,000 | 13.31 s | 384,006 rows/s |
-| openGauss → PostgreSQL | 5,110,000 | 17.39 s | 293,923 rows/s |
-| PostgreSQL → openGauss | 5,110,000 | 19.32 s | 264,441 rows/s |
-| openGauss → MySQL | 5,110,000 | 23.57 s | 216,776 rows/s |
-| PostgreSQL → MySQL | 5,110,000 | 27.52 s | 185,680 rows/s |
-
-В запуске MySQL → openGauss в источнике также были две временные таблицы по 1,000,000 строк, поэтому получилось 7,110,000 строк.
-
-Параллелизм по диапазонам первичного ключа (`--workers 4`): PostgreSQL → MySQL, 1,25 млн строк за 6,23 с / 200 517 строк/с (последовательно 9,11 с / 137 168 строк/с, примерно на 46% быстрее); openGauss → MySQL, 5 млн строк за 15,12 с / 330 621 строк/с. Оба запуска прошли проверку checksum.
-
-Пакетное планирование I/O (`--io-scheduler fair --io-prefetch 0`) против `off`: PostgreSQL, 1,25 млн строк за 5,18 с / 241 276 строк/с (off 5,80 с / 215 442); openGauss, 5 млн строк за 14,30 с / 349 703 строк/с (off 15,07 с / 331 851). Оба запуска прошли проверку checksum.
-
-Типичные результаты по таблицам на том же наборе данных:
-
-| Таблица | Строк | Примечание |
-|---|---:|---|
-| `big` | 5,000,000 | Целочисленный первичный ключ, параллелизм по диапазонам |
-| `comp` | 100,000 | Составной первичный ключ |
-| `nopk` | 10,000 | Без первичного ключа |
-| `users` | 100,000 | Вторичные индексы, текстовые и decimal-столбцы |
+- [docs/usage.md](docs/usage.md) - полный справочник параметров
+- [docs/dependencies.md](docs/dependencies.md) - драйверы, загрузчики, устранение неполадок
+- `migrator doctor` - проверка окружения
 
 ## Ограничения
 
-- CDC требует первичный ключ; таблицы без первичного ключа пропускаются.
-- CDC поддерживает источники MySQL (binlog ROW) и PostgreSQL (логическое декодирование wal2json); цель PG CDC должна быть PG/openGauss, не MySQL.
-- Для PostgreSQL CDC нужны `wal_level=logical`, разрешённый плагин `wal2json` в `output_plugin_libraries` и слот репликации; изменения во время полной миграции не будут захвачены, если слот не создан заранее.
-- `--repair` требует одностолбцовый первичный ключ; для целочисленных ключей используется потоковое слияние (O(batch) памяти), для остальных — наборы в памяти.
-- Неподдерживаемые типы столбцов: BIT, ENUM, SET, GEOMETRY.
-- Преобразование DDL ограничено; сложный MySQL-специфичный DDL может требовать ручной правки.
-- DM8 не реализован.
-- Миграция представлений PostgreSQL → MySQL пока не реализована.
-- Целевые таблицы должны быть пустыми или уже согласованными; используйте `--truncate`, чтобы удалить и пересоздать их для безопасного перезапуска.
-- Ошибки чтения при проверке контрольных сумм теперь приводят к FAIL, а не игнорируются.
-- Подключения при полной миграции повторяются с задержкой; CDC переподключается с последней зафиксированной позиции binlog.
-- Для удалённых БД откройте порт, разрешите хост клиента в грантах/файрволе; при необходимости используйте SSH-туннель или VPN.
-- `--resume` реализован для источников MySQL, PostgreSQL и openGauss; требуется одностолбцовый первичный ключ.
-- `--consistent-snapshot` использует одно соединение с источником (MySQL: снимок + позиция binlog; PG/openGauss: REPEATABLE READ) и принудительно включает `workers=1`.
-- `--resume` и `--truncate` взаимоисключающи.
-- Источники PostgreSQL/openGauss теперь поддерживают параллелизм по диапазонам первичного ключа (`--workers`); режимы `--resume` и `--consistent-snapshot` по-прежнему используют один последовательный курсор.
-- Массовая загрузка в MySQL использует `LOAD DATA LOCAL INFILE`; на сервере должен быть включён `local_infile=ON`. Таблицы с бинарными столбцами автоматически переключаются на пакетный INSERT.
-- Целевые базы openGauss следует создавать с `DBCOMPATIBILITY='PG'`; если учётная запись использует аутентификацию sha256, нативному libpq может потребоваться переключение на md5.
-
-## Веб-панель
-
-Панель показывает прогресс, пропускную способность, состояние таблиц, результат проверки и поток событий. Поддерживаются три языка интерфейса:
-
-- 中文
-- English
-- Русский
-
-Выбор языка сохраняется в localStorage браузера.
-
-## Метрики
-
-Endpoint Prometheus: `http://127.0.0.1:8123/metrics`.
-
-Метрики: `migrator_rows_done`, `migrator_rows_total`, `migrator_errors_total`, `migrator_batches_total`, `migrator_bytes_written_total`, `migrator_verify_mismatch`, `migrator_running`, `migrator_verified`, а также `migrator_table_rows_done{table="..."}`.
+- Таблицы Oracle с `BLOB` идут по двухэтапному пути и медленнее обычных
+- `bcp` / `sqlldr` получают пароль через командную строку или временный файл;
+  ограничьте доступ к хосту
+- CDC требует binlog (MySQL) или логической репликации (PostgreSQL)
+- Веб-панель только для чтения; модули переключаются при сборке
 
 ## Лицензия
 
-Apache License 2.0. См. [LICENSE](LICENSE).
+См. [LICENSE](LICENSE).

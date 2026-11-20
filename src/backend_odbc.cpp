@@ -963,7 +963,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
       std::lock_guard<std::mutex> lk(stage_mu_);
       pending = (stage_pending_[table] += (int64_t)rows.size());
     }
-    if (pending >= 100000) return oracle_copy_stage(table, s);
+    if (pending > 0) return oracle_copy_stage(table, s);
     return Status::OK();
   }
 
@@ -1075,6 +1075,22 @@ class OdbcTarget : public OdbcConn, public ITarget {
       for (auto& kv : bcp_buf_) {
         if (!kv.second.empty()) {
           Status st = flush_pending_locked(kv.first);
+          if (!st.ok()) return st;
+        }
+      }
+    }
+    // Oracle 两段式：提交点必须把暂存表剩余行转入目标，否则尾批会丢
+    if (kind_ == "oracle") {
+      std::vector<std::string> pending;
+      {
+        std::lock_guard<std::mutex> lk(stage_mu_);
+        for (auto& kv : stage_pending_)
+          if (kv.second > 0) pending.push_back(kv.first);
+      }
+      for (const auto& t : pending) {
+        auto sit = bcp_schema_.find(t);
+        if (sit != bcp_schema_.end()) {
+          Status st = oracle_copy_stage(t, sit->second);
           if (!st.ok()) return st;
         }
       }
