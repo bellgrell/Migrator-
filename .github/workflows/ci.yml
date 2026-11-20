@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     name: build (${{ matrix.os }})
+    if: matrix.os != 'macos-14' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
