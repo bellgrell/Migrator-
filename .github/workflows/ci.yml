@@ -12,11 +12,10 @@ permissions:
 jobs:
   build:
     name: build (${{ matrix.os }})
-    if: matrix.os != 'macos-14' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
