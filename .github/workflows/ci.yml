@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential libmysqlclient-dev libpq-dev libssl-dev
+            build-essential libmysqlclient-dev libpq-dev libssl-dev unixodbc-dev
 
       - name: dependencies (macOS)
         if: runner.os == 'macOS'
@@ -62,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential libmysqlclient-dev libpq-dev libssl-dev
+            build-essential libmysqlclient-dev libpq-dev libssl-dev unixodbc-dev
       - name: build
         run: make -j2 asan
       - name: run

@@ -40,6 +40,19 @@ endif
 ifeq ($(wildcard $(PG_PREFIX)/include/libpq-fe.h),)
 PG_PREFIX :=
 endif
+
+# Linux distribution fallbacks (no Homebrew)
+ifeq ($(MYSQL_PREFIX),)
+  ifneq ($(wildcard /usr/include/mysql/mysql.h),)
+    MYSQL_PREFIX := /usr
+  endif
+endif
+ifeq ($(PG_PREFIX),)
+  ifneq ($(wildcard /usr/include/postgresql/libpq-fe.h),)
+    PG_INCLUDE_DIR := /usr/include/postgresql
+    PG_LIB_DIR := /usr/lib/x86_64-linux-gnu
+  endif
+endif
 ifeq ($(wildcard $(OPENSSL_PREFIX)/include/openssl/ssl.h),)
 OPENSSL_PREFIX :=
 endif
@@ -68,6 +81,9 @@ endif
 ifneq ($(PG_PREFIX),)
 CXXFLAGS += -DHAVE_PG -I$(PG_PREFIX)/include
 LDFLAGS  += -L$(PG_PREFIX)/lib -lpq
+else ifneq ($(PG_INCLUDE_DIR),)
+CXXFLAGS += -DHAVE_PG -I$(PG_INCLUDE_DIR)
+LDFLAGS  += -L$(PG_LIB_DIR) -lpq
 endif
 
 # mm-verify digest engine: ICU is optional (accent/collation degrade without it).
@@ -82,7 +98,7 @@ endif
 CXXFLAGS += -Iverify/mmv
 
 # ODBC is optional; SQL Server / Oracle backends need unixODBC + drivers.
-ODBC_PREFIX ?= /opt/homebrew
+ODBC_PREFIX ?= $(if $(wildcard /usr/include/sql.h),/usr,/opt/homebrew)
 ifneq ($(wildcard $(ODBC_PREFIX)/include/sql.h),)
 CXXFLAGS += -DHAVE_ODBC -I$(ODBC_PREFIX)/include
 LDFLAGS  += -L$(ODBC_PREFIX)/lib -lodbc
