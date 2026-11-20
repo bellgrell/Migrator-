@@ -44,8 +44,36 @@
 | og2mysql | openGauss | MySQL | 完整（视图暂不支持） |
 | mysql2mysql | MySQL | MySQL | 完整 |
 | mysql2opengauss | MySQL | openGauss | mysql2og 的别名 |
+| mysql2mssql | MySQL | SQL Server | 完整（bcp 通道） |
+| mssql2mysql | SQL Server | MySQL | 完整 |
+| mssql2mssql | SQL Server | SQL Server | 完整（bcp 通道） |
+| mysql2oracle | MySQL | Oracle | 完整（sqlldr 通道） |
+| oracle2mysql | Oracle | MySQL | 完整 |
+| oracle2oracle | Oracle | Oracle | 完整（sqlldr 通道） |
 
-也可用 `--source-type` / `--target-type` 显式指定 `mysql|pg|og`，覆盖 mode。
+也可用 --source-type / --target-type 显式指定 mysql|pg|og|mssql|oracle，覆盖 mode。
+
+## 3.1 ODBC 目标与批量装载
+
+SQL Server 与 Oracle 通过 ODBC 接入，DSN 必须带 driver=，否则会回退到默认驱动（FreeTDS /
+Oracle in instantclient_23_x）并连接失败：
+
+    --target "host=127.0.0.1;port=1433;user=sa;password=...;db=bench_dst;driver=ODBC Driver 18 for SQL Server"
+    --target "host=127.0.0.1;port=1521;user=bench_dst;password=...;db=FREEPDB1;driver=Oracle 23 ODBC Driver"
+
+驱动名与批量装载器路径可在 config/providers.ini 配置（优先级：环境变量 > 文件 > 自动探测）：
+
+    mssql_driver=ODBC Driver 18 for SQL Server
+    oracle_driver=Oracle 23 ODBC Driver
+    bcp_path=
+    sqlldr_path=
+
+安装完成后运行 ./build/migrator doctor 检查驱动注册、客户端库与工具可用性。
+
+检测到 bcp / sqlldr 时启用批量通道；缺失则回退逐行 SQL。Oracle 的 BLOB 列走两段式
+（十六进制暂存表 + TO_BLOB(HEXTORAW())），每批写入后立即转换，避免尾批丢失。
+
+实测（505 万行 / 7 表）：bcp 35.8 s、sqlldr 133.7 s；对应回退路径为 233 s 与 1285 s。
 
 ## 4. 参数总表
 
@@ -224,6 +252,9 @@ VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
 | 修复内存 | 整数主键流式归并 O(batch)；非整数主键仍用集合比较 |
 | I/O 调度器只管客户端批读 | 物理磁盘调度仍由 OS/数据库引擎负责 |
 | 区间并行需单列整数主键 | MySQL / PostgreSQL / openGauss 源均支持；`--resume` 与 `--consistent-snapshot` 自动退回顺序读取 |
+| Oracle BLOB 表 | 两段式装载，速度低于普通表 |
+| bcp / sqlldr 凭据 | 通过命令行或临时文件传递，需限制主机访问 |
+| macOS CI | 自动构建仅覆盖 Linux；macOS 需手动触发 workflow_dispatch |
 
 ## 16. openGauss 对接
 
