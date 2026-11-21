@@ -238,6 +238,8 @@ class MySqlSource : public ISource, public DbBase {
   }
 
   Status begin_snapshot(std::string& file, uint64_t& pos) override {
+    mysql_query(conn_, "SET SESSION net_write_timeout=3600");
+    mysql_query(conn_, "SET SESSION net_read_timeout=3600");
     if (mysql_query(conn_, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
       return err("set isolation");
     if (mysql_query(conn_, "START TRANSACTION WITH CONSISTENT SNAPSHOT"))

@@ -87,6 +87,8 @@ class MySqlTarget : public ITarget, public DbBase {
     }
     mysql_set_character_set(conn_, "utf8mb4");
     // 装载期会话级优化（失败不致命：权限不足时忽略）
+    mysql_query(conn_, "SET SESSION net_write_timeout=3600");
+    mysql_query(conn_, "SET SESSION net_read_timeout=3600");
     mysql_query(conn_, "SET SESSION unique_checks=0");
     mysql_query(conn_, "SET SESSION foreign_key_checks=0");
     mysql_query(conn_, "SET SESSION sql_log_bin=0");
@@ -186,9 +188,26 @@ class MySqlTarget : public ITarget, public DbBase {
     auto& st = state(table);
     ensure_columns(table, st);
     const bool force_insert = (opts_.load_mode == "insert");
+    // 宽表（>512B/行）在 LOAD DATA 长装载下会被断连，自动改用多行 INSERT
+    if (!force_insert && load_enabled_ && st.load_ok() && !rows.empty()) {
+      int64_t est = 0;
+      for (const auto& r : rows)
+        for (const auto& v : r) est += (int64_t)v.s.size() + 8;
+      if (est / (int64_t)rows.size() > 512) st.load_disabled = true;
+    }
     if (load_enabled_ && st.load_ok() && !force_insert) {
       if (!st.loader.is_open()) st.loader.open();
-      for (const auto& r : rows) st.loader.write_row(r, &st.bin_cols);
+      for (const auto& r : rows) {
+        st.loader.write_row(r, &st.bin_cols);
+        for (const auto& v : r) st.bytes += (int64_t)v.s.size() + 8;
+      }
+      // LOAD DATA 单次载荷按字节封顶，避免宽表一次推送过大
+      if (st.loader.pending() >= 100000 ||
+          st.bytes >= (int64_t)(16 * 1024 * 1024)) {
+        Status s = flush_load(table, st);
+        if (!s.ok()) return s;
+        st.bytes = 0;
+      }
     } else {
       Status s = insert_batch(table, rows);
       if (!s.ok()) return s;
@@ -272,7 +291,9 @@ class MySqlTarget : public ITarget, public DbBase {
     std::vector<bool> bin_cols;
     LocalFileLoader loader;
     bool ensure_done = false;
-    bool load_ok() const { return ensure_done; }
+    bool load_disabled = false;  // 宽表自动改走 INSERT
+    int64_t bytes = 0;           // 当前 TSV 缓冲的估算字节数
+    bool load_ok() const { return ensure_done && !load_disabled; }
   };
 
   TableState& state(const std::string& table) {

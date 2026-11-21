@@ -326,7 +326,8 @@ class OdbcConn {
       if (base == "varchar" || base == "nvarchar" || base == "text" ||
           base == "character varying" || base == "json" || base == "jsonb" ||
           base == "enum" || base == "set" || base == "uuid")
-        return "nvarchar" + (args.empty() || base == "text" || base == "json"
+        return "nvarchar" + (args.empty() || base == "text" || base == "json" ||
+                             base == "enum" || base == "set"
                                  ? "(max)" : args);
       if (base == "binary" || base == "varbinary" || base == "blob" ||
           base == "bytea")
@@ -354,10 +355,11 @@ class OdbcConn {
     if (base == "bit" || base == "bool" || base == "boolean") return "NUMBER(1)";
     if (base == "decimal" || base == "numeric")
       return "NUMBER" + (args.empty() ? std::string("(18,4)") : args);
+    // Oracle 的 BINARY_DOUBLE/BINARY_FLOAT 不接受精度，FLOAT(p) 可以
     if (base == "float" || base == "double" || base == "double precision" ||
         base == "float8")
-      return "BINARY_DOUBLE";
-    if (base == "real" || base == "float4") return "BINARY_FLOAT";
+      return "FLOAT";
+    if (base == "real" || base == "float4") return "FLOAT";
     if (base == "char" || base == "nchar") return "CHAR" + (args.empty() ? "(1)" : args);
     if (base == "varchar" || base == "varchar2" || base == "nvarchar" ||
         base == "character varying") {
@@ -371,7 +373,8 @@ class OdbcConn {
       return "BLOB";
     if (base == "date") return "DATE";
     if (base == "datetime" || base == "timestamp" ||
-        base == "timestamp without time zone" || base == "timestamp with time zone")
+        base == "timestamp without time zone" || base == "timestamp with time zone" ||
+        base == "datetime2" || base == "smalldatetime" || base == "datetimeoffset")
       return "TIMESTAMP";
     if (base == "time") return "VARCHAR2(32)";
     if (base == "uuid") return "VARCHAR2(36)";
