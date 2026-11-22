@@ -834,6 +834,79 @@ class OdbcTarget : public OdbcConn, public ITarget {
     return commit();
   }
 
+
+  // 数组绑定：一次 SQLExecute 提交 N 行，避免逐行往返与超长字面量 SQL
+  Status insert_batch_array(const std::string& table, const TableSchema& s,
+                            const std::vector<Row>& rows, size_t chunk) {
+    if (!dbc_) return Status::Err(Code::kDb, "odbc target: not connected");
+    const size_t ncol = s.columns.size();
+    if (ncol == 0 || rows.empty()) return Status::OK();
+    std::string cols, ph;
+    for (size_t i = 0; i < ncol; ++i) {
+      if (i) { cols += ","; ph += ","; }
+      cols += qid(s.columns[i].name);
+      ph += "?";
+    }
+    const std::string sql =
+        "INSERT INTO " + qid(table) + " (" + cols + ") VALUES (" + ph + ")";
+    SQLHSTMT st = SQL_NULL_HANDLE;
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, dbc_, &st)))
+      return Status::Err(Code::kDb, "odbc array: alloc stmt failed");
+    auto fail = [&](const char* what) {
+      std::string e = odbc_error(SQL_HANDLE_STMT, st);
+      SQLFreeHandle(SQL_HANDLE_STMT, st);
+      return Status::Err(Code::kDb, std::string("odbc array ") + what + ": " + e);
+    };
+    if (!SQL_SUCCEEDED(SQLPrepare(st, (SQLCHAR*)sql.c_str(), SQL_NTS)))
+      return fail("prepare");
+
+    const size_t kWidthCap = 4000;
+    for (size_t start = 0; start < rows.size(); start += chunk) {
+      const size_t n = std::min(chunk, rows.size() - start);
+      std::vector<std::vector<char>> bufs(ncol);
+      std::vector<std::vector<SQLLEN>> inds(ncol);
+      std::vector<SQLULEN> widths(ncol, 1);
+      for (size_t c = 0; c < ncol; ++c) {
+        if (col_is_binary(s.columns[c]))
+          return Status::Err(Code::kUnsupported, "odbc array: binary column");
+        size_t w = 1;
+        for (size_t r = 0; r < n; ++r) {
+          const Value& v = rows[start + r][c];
+          if (v.type == ValType::kNull) continue;
+          size_t len = raw_text(v).size();
+          if (len > w) w = len;
+        }
+        if (w > kWidthCap)
+          return Status::Err(Code::kUnsupported, "odbc array: value too wide");
+        widths[c] = (SQLULEN)w + 1;
+        bufs[c].assign(n * widths[c], 0);
+        inds[c].assign(n, 0);
+        for (size_t r = 0; r < n; ++r) {
+          const Value& v = rows[start + r][c];
+          if (v.type == ValType::kNull) { inds[c][r] = SQL_NULL_DATA; continue; }
+          const std::string t = raw_text(v);
+          const size_t cp = std::min(t.size(), (size_t)widths[c] - 1);
+          std::memcpy(bufs[c].data() + r * widths[c], t.data(), cp);
+          inds[c][r] = (SQLLEN)t.size();
+        }
+      }
+      for (size_t c = 0; c < ncol; ++c) {
+        if (!SQL_SUCCEEDED(SQLBindParameter(
+                st, (SQLUSMALLINT)(c + 1), SQL_PARAM_INPUT, SQL_C_CHAR,
+                SQL_VARCHAR, widths[c], 0, bufs[c].data(), widths[c],
+                inds[c].data())))
+          return fail("bind");
+      }
+      if (!SQL_SUCCEEDED(SQLSetStmtAttr(st, SQL_ATTR_PARAMSET_SIZE,
+                                        (SQLPOINTER)(intptr_t)n, 0)))
+        return fail("paramset");
+      const SQLRETURN rc = SQLExecute(st);
+      if (!SQL_SUCCEEDED(rc) && rc != SQL_NO_DATA) return fail("execute");
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    return Status::OK();
+  }
+
   Status write_batch(const std::string& table, const std::vector<Row>& rows) override {
     if (rows.empty()) return Status::OK();
     TableSchema s;
@@ -880,20 +953,25 @@ class OdbcTarget : public OdbcConn, public ITarget {
     // 字面量批量写入（每 2000 行一条语句）
     const size_t kChunk = 1000;
     if (kind_ == "oracle") {
-      for (size_t start = 0; start < rows.size(); start += kChunk) {
-        const size_t end = std::min(rows.size(), start + kChunk);
-        std::string sql = "INSERT ALL ";
-        for (size_t k = start; k < end; ++k) {
-          sql += "INTO " + qid(table) + " (" + cols + ") VALUES (";
-          for (size_t i = 0; i < rows[k].size(); ++i) {
-            if (i) sql += ",";
-            sql += lit(rows[k][i]);
+      // 优先数组绑定（一次执行 N 行）；不支持时回退到 INSERT ALL 字面量
+      Status ab = insert_batch_array(table, s, rows, 500);
+      if (!ab.ok() && ab.code != Code::kUnsupported) return ab;
+      if (!ab.ok()) {
+        for (size_t start = 0; start < rows.size(); start += kChunk) {
+          const size_t end = std::min(rows.size(), start + kChunk);
+          std::string sql = "INSERT ALL ";
+          for (size_t k = start; k < end; ++k) {
+            sql += "INTO " + qid(table) + " (" + cols + ") VALUES (";
+            for (size_t i = 0; i < rows[k].size(); ++i) {
+              if (i) sql += ",";
+              sql += lit(rows[k][i]);
+            }
+            sql += ") ";
           }
-          sql += ") ";
+          sql += "SELECT 1 FROM DUAL";
+          Status st2 = w->exec(sql);
+          if (!st2.ok()) return st2;
         }
-        sql += "SELECT 1 FROM DUAL";
-        Status st = w->exec(sql);
-        if (!st.ok()) return st;
       }
     } else {
       for (size_t start = 0; start < rows.size(); start += kChunk) {
@@ -1338,7 +1416,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
     const std::string direct = any_bin ? "false" : "true";
     const std::string cmd = sqlldr_bin() + " \"userid=" + user + "/" + pass + "@//" + host +
                             ":" + port + "/" + db + "\" control=\"" + ctl + "\" log=\"" + log +
-                            "\" bad=\"" + bad + "\" direct=" + direct + " errors=0 >/dev/null 2>&1";
+                            "\" bad=\"" + bad + "\" direct=" + direct + " errors=1000000 >/dev/null 2>&1";
     const int rc = system(cmd.c_str());
     const int64_t n = (int64_t)it->second.size();
     it->second.clear();
