@@ -188,7 +188,7 @@ class MySqlTarget : public ITarget, public DbBase {
     auto& st = state(table);
     ensure_columns(table, st);
     const bool force_insert = (opts_.load_mode == "insert");
-    // 宽表（>512B/行）在 LOAD DATA 长装载下会被断连，自动改用多行 INSERT
+    // 宽表（>512B/行）在 LOAD DATA 长装载下会被断连，改用多行 INSERT
     if (!force_insert && load_enabled_ && st.load_ok() && !rows.empty()) {
       int64_t est = 0;
       for (const auto& r : rows)
@@ -201,7 +201,8 @@ class MySqlTarget : public ITarget, public DbBase {
         st.loader.write_row(r, &st.bin_cols);
         for (const auto& v : r) st.bytes += (int64_t)v.s.size() + 8;
       }
-      // LOAD DATA 单次载荷按字节封顶，避免宽表一次推送过大
+      // LOAD DATA 的单次载荷超过服务端 max_allowed_packet 会被断连。
+      // 宽表 10 万行可达 ~100MB > 64MB，因此按字节封顶后再刷。
       if (st.loader.pending() >= 100000 ||
           st.bytes >= (int64_t)(16 * 1024 * 1024)) {
         Status s = flush_load(table, st);
@@ -391,6 +392,7 @@ class MySqlTarget : public ITarget, public DbBase {
     if (mysql_query(conn_, sql.c_str())) return err("load data " + table);
     consume_results();
     st.loader.reset();
+    st.bytes = 0;
     return Status::OK();
   }
 

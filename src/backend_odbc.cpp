@@ -511,6 +511,14 @@ class OdbcSource : public OdbcConn, public ISource {
                       qid(pk_col));
   }
 
+  // 单表主键区间并行：闭区间 [lo, hi]（ODBC 源，mssql）
+  Status open_cursor_range(const std::string& table, const std::string& column,
+                           int64_t lo, int64_t hi) override {
+    return run_cursor("SELECT * FROM " + qid(table) + " WHERE " +
+                      qid(column) + " BETWEEN " + std::to_string(lo) +
+                      " AND " + std::to_string(hi));
+  }
+
   Status fetch_batch(int n, std::vector<Row>& out) override {
     out.clear();
     if (!cur_) return Status::OK();
@@ -840,7 +848,8 @@ class OdbcTarget : public OdbcConn, public ITarget {
     if ((kind_ == "mssql" || kind_ == "oracle") && !s.columns.empty()) {
       bool has_bin = false;
       for (const auto& c : s.columns) if (col_is_binary(c)) has_bin = true;
-      if (kind_ == "oracle" && has_bin) {
+      // 结构性调整：sqlldr 通道本身支持 hex→TO_BLOB，只有 sqlldr 不可用时才走两段式
+      if (kind_ == "oracle" && has_bin && !sqlldr_ready()) {
         return oracle_stage_write(table, s, rows);
       }
       const bool bulk_ok = (kind_ == "mssql") ? bcp_ready() : sqlldr_ready();
@@ -852,6 +861,11 @@ class OdbcTarget : public OdbcConn, public ITarget {
         if (buf.size() >= 100000) {
           Status st = flush_pending_locked(table);
           if (!st.ok()) return st;
+        }
+        // 批量通道原来不累加 written_，导致汇总行 rows=0、退出码被判失败
+        {
+          std::lock_guard<std::mutex> lk2(mu_);
+          written_[table] += (int64_t)rows.size();
         }
         return Status::OK();
       }
@@ -966,7 +980,14 @@ class OdbcTarget : public OdbcConn, public ITarget {
       std::lock_guard<std::mutex> lk(stage_mu_);
       pending = (stage_pending_[table] += (int64_t)rows.size());
     }
-    if (pending > 0) return oracle_copy_stage(table, s);
+    // P2：攒够一批再转换，减少 INSERT..SELECT + TRUNCATE 的次数；
+    // close() 里仍会 flush 残留，保证尾批不丢（D5 回归项）
+    static const int64_t kStageFlush = [] {
+      const char* e = std::getenv("MIG_ORA_STAGE_FLUSH");
+      int64_t v = e ? std::atoll(e) : 50000;
+      return v >= 1000 ? v : 50000;
+    }();
+    if (pending >= kStageFlush) return oracle_copy_stage(table, s);
     return Status::OK();
   }
 
@@ -1296,8 +1317,10 @@ class OdbcTarget : public OdbcConn, public ITarget {
         const std::string t = lower_ascii(s.columns[i].src_type);
         c << "  \"" << s.columns[i].name << "\"";
         if (col_is_binary(s.columns[i])) { c << " \"TO_BLOB(HEXTORAW(:" << s.columns[i].name << "))\""; if (i + 1 < s.columns.size()) c << ","; c << "\n"; continue; }
-        if (t.find("timestamp") != std::string::npos)
-          c << " TIMESTAMP \"YYYY-MM-DD HH24:MI:SS.FF\"";
+        // datetime 含子串 date，必须优先判断；微秒列要用 FF6，否则 ORA-26041
+        if (t.find("datetime") != std::string::npos ||
+            t.find("timestamp") != std::string::npos)
+          c << " TIMESTAMP \"YYYY-MM-DD HH24:MI:SS.FF6\"";
         else if (t.find("date") != std::string::npos)
           c << " DATE \"YYYY-MM-DD HH24:MI:SS\"";
         if (i + 1 < s.columns.size()) c << ",";

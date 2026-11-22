@@ -30,3 +30,4 @@ qt/build/
 # build artifacts
 *.deb
 packaging/debian/
+build-static/

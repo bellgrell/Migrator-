@@ -2,153 +2,118 @@
 
 [English](README.md) | [中文](README.zh.md) | **Русский**
 
-Инструмент гетерогенной миграции баз данных на C++17 для **MySQL, PostgreSQL,
-openGauss, SQL Server и Oracle**. Поддерживает полную миграцию в нескольких
-направлениях, сверку количества строк и контрольных сумм, CDC; SQL Server и
-Oracle подключаются через ODBC и могут использовать штатные загрузчики
-(`bcp`, `sqlldr`).
+Нативный инструмент на C++17 для переноса данных между **MySQL, PostgreSQL,
+openGauss, SQL Server и Oracle**: полная загрузка, проверка, докачка и CDC.
+Один бинарный файл — без Docker, без Python, без внешних сервисов.
+
+```bash
+./run.sh --mode mysql2pg --source "db=app;host=10.0.0.5;user=reader;password=env:SRC_PW" \
+                             --target "host=10.0.0.9;user=postgres;db=app_dst;password=env:DST_PW" \
+         --batch 5000 --commit 10 --workers 4
+```
 
 ## Возможности
 
-- 13 штатных направлений миграции по пяти СУБД; остальные пары через `--source-type` / `--target-type`
-- Сверка количества строк и контрольных сумм (FNV или дайджест mmv)
-- Массовая загрузка: `bcp` для SQL Server, `sqlldr` для Oracle (при отсутствии - обычные INSERT)
-- Двухэтапная загрузка таблиц Oracle с `BLOB` (промежуточная таблица + `TO_BLOB`)
-- CDC из binlog MySQL и логической репликации PostgreSQL, опциональная синхронизация DDL
-- Докачка по водяному знаку первичного ключа, параллелизм по диапазонам ключа
-- Веб-панель (китайский / английский / русский), журнал аудита, TLS
-- Самопроверка `doctor`: клиентские библиотеки, драйверы ODBC, загрузчики
-- Пакет Debian и самодостаточный Docker-образ
+- **13 штатных режимов** для пяти СУБД; остальные пары — через `--source-type` / `--target-type`
+- **Проверка по числу строк и контрольной сумме** (FNV или mmv, где поддерживается)
+- **Параллелизм по диапазонам первичного ключа**: большая таблица делится по PK
+- **Адаптивная загрузка в MySQL**: `LOAD DATA` для узких строк, многострочный `INSERT` для широких
+- **Докачка** с водяного знака PK, `--verify-async`
+- **CDC** из binlog MySQL и логической репликации PostgreSQL
+- **Встроенная веб-панель** (китайский / английский / русский), аудит и TLS
+- **`doctor`** — самопроверка клиентских библиотек, ODBC-драйверов и загрузчиков
+- **Без Docker**: только клиентские библиотеки
 
-## Поддерживаемые направления
+## Направления
 
-| Режим | Источник | Приёмник | Примечание |
-|---|---|---|---|
-| `mysql2pg` | MySQL | PostgreSQL | полная загрузка + сверка |
-| `mysql2og` | MySQL | openGauss | полная загрузка + сверка |
-| `pg2mysql` | PostgreSQL | MySQL | полная загрузка + сверка |
-| `pg2og` | PostgreSQL | openGauss | полная загрузка + сверка |
-| `og2pg` | openGauss | PostgreSQL | полная загрузка + сверка |
-| `og2mysql` | openGauss | MySQL | полная загрузка + сверка |
-| `mysql2mysql` | MySQL | MySQL | полная загрузка + сверка |
-| `mysql2mssql` | MySQL | SQL Server | канал `bcp` |
-| `mssql2mysql` | SQL Server | MySQL | полная загрузка |
-| `mssql2mssql` | SQL Server | SQL Server | канал `bcp` |
-| `mysql2oracle` | MySQL | Oracle | канал `sqlldr` |
-| `oracle2mysql` | Oracle | MySQL | полная загрузка |
-| `oracle2oracle` | Oracle | Oracle | канал `sqlldr` |
+| Режим | Источник | Приёмник |
+|---|---|---|
+| `mysql2pg` | MySQL | PostgreSQL |
+| `mysql2og` | MySQL | openGauss |
+| `pg2mysql` | PostgreSQL | MySQL |
+| `pg2og` | PostgreSQL | openGauss |
+| `og2pg` | openGauss | PostgreSQL |
+| `og2mysql` | openGauss | MySQL |
+| `mysql2mysql` | MySQL | MySQL |
+| `mysql2mssql` | MySQL | SQL Server |
+| `mssql2mysql` | SQL Server | MySQL |
+| `mssql2mssql` | SQL Server | SQL Server |
+| `mysql2oracle` | MySQL | Oracle |
+| `oracle2mysql` | Oracle | MySQL |
+| `oracle2oracle` | Oracle | Oracle |
 
-Другие пары задаются переопределением типов, например:
+## Установка
+
+### Портативный пакет (без Docker)
 
 ```bash
-./build/migrator --mode mysql2pg --source-type oracle --target-type pg ...
+tar -xzf migrator-1.0.0-linux-x64.tar.gz
+cd migrator-1.0.0-linux-x64
+./run.sh doctor
 ```
 
-## Быстрый старт
+Собрать самостоятельно: `bash packaging/build-portable.sh 1.0.0`
 
-### Сборка
+Требования: Linux x86-64, glibc 2.39+, сетевой доступ к СУБД. ODBC-драйверы нужны
+только для SQL Server (`msodbcsql18`) и Oracle (Instant Client + ODBC).
+
+### Из исходников
 
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build pkg-config \
   libmysqlclient-dev libpq-dev unixodbc-dev libssl-dev
-make -j4            # или: cmake -S . -B build -G Ninja && cmake --build build -j
-```
-
-macOS:
-
-```bash
-brew install mysql-client libpq unixodbc openssl@3
 make -j4
 ```
 
-### Проверка окружения
+## DSN
 
-```bash
-./build/migrator doctor
+```
+host=...;port=...;user=...;password=...;db=...
 ```
 
-`doctor` проверяет клиентские библиотеки, зарегистрированные драйверы ODBC,
-`bcp` и `sqlldr`; ненулевой код возврата только при серьёзных ошибках. Имена
-драйверов и пути задаются в `config/providers.ini` (или `MIG_MSSQL_DRIVER`,
-`MIG_ORACLE_DRIVER`, `MIG_BCP`, `MIG_SQLLDR`). Подробнее:
-[docs/dependencies.md](docs/dependencies.md).
+Поддерживаются `password=env:VAR` и `password=file:PATH`. Если указан `driver=`,
+ключ `password=` должен идти **последним**.
 
-### Запуск миграции
-
-```bash
-./build/migrator --mode mysql2pg \
-  --source "host=127.0.0.1;port=3306;user=root;password=...;db=demo" \
-  --target "host=127.0.0.1;port=5432;user=postgres;password=...;db=demo_dst" \
-  --batch 5000 --workers 4 --truncate --exit
-```
-
-Для SQL Server драйвер указывается в DSN:
-
-```bash
---target "host=127.0.0.1;port=1433;user=sa;password=...;db=demo_dst;driver=ODBC Driver 18 for SQL Server"
-```
-
-## Каналы массовой загрузки
-
-Если доступны `bcp` или `sqlldr`, пакет целиком передаётся штатному загрузчику;
-иначе выполняется обычная вставка SQL.
-
-Замер на 5,05 млн строк / 7 таблиц (Ubuntu, базы в Docker):
-
-| Приёмник | Канал | Время | Пропускная способность |
-|---|---|---|---|
-| SQL Server | `bcp` | 35,8 с | 8,8 МБ/с |
-| SQL Server | INSERT | 233 с | 1,3 МБ/с |
-| Oracle | `sqlldr` | 133,7 с | 2,4 МБ/с |
-| Oracle | INSERT ALL | 1285 с | 0,2 МБ/с |
-
-Колонки `BLOB` в Oracle загружаются в два этапа: шестнадцатеричный текст во
-промежуточную таблицу, затем `TO_BLOB(HEXTORAW(...))` в целевую таблицу.
-
-## Сборка пакетов
-
-```bash
-# Пакет Debian/Ubuntu
-bash packaging/build-deb.sh
-sudo dpkg -i mini-migrator_0.9.0_amd64.deb
-
-# Самодостаточный образ (msodbcsql18 + Instant Client + bcp/sqlldr)
-docker build -t mini-migrator:full -f packaging/Dockerfile .
-docker run --rm mini-migrator:full doctor
-```
-
-Пакет устанавливает `/usr/bin/mini-migrator` и
-`/etc/mini-migrator/providers.ini`.
-
-## Основные параметры
+## Ключевые параметры
 
 | Параметр | По умолчанию | Описание |
 |---|---|---|
-| `--mode` | `sim` | режим миграции (таблица выше) |
-| `--source` / `--target` | - | DSN: `host=;port=;user=;password=;db=` |
 | `--batch` | 1000 | строк в пакете |
 | `--commit` | 10 | коммит каждые N пакетов |
-| `--workers` | 1 | число потоков и параллелизм по диапазонам ключа |
-| `--truncate` | выкл | очистить целевые таблицы перед загрузкой |
-| `--no-verify` | выкл | пропустить сверку строк и контрольных сумм |
-| `--resume` / `--resume-dir` | выкл | докачка по водяному знаку ключа |
-| `--cdc` | выкл | применять изменения после полной загрузки |
-| `--with-views` | выкл | переносить представления (где поддерживается) |
-| `--port` | 8123 | порт веб-панели |
+| `--workers` | 1 | параллельные потоки / диапазоны PK |
+| `--truncate` | выкл | очистить целевые таблицы |
+| `--load-mode` | `auto` | режим загрузки в MySQL |
+| `--verify-async` | выкл | проверка после загрузки |
+| `--resume` | выкл | докачка по PK |
+| `--cdc` | выкл | непрерывная синхронизация |
+| `--tables-config` | — | политика по таблицам |
 
-## Документация
+## Производительность
 
-- [docs/usage.md](docs/usage.md) - полный справочник параметров
-- [docs/dependencies.md](docs/dependencies.md) - драйверы, загрузчики, устранение неполадок
-- `migrator doctor` - проверка окружения
+Для цели MySQL важнее всего настройки сервера: `innodb_buffer_pool_size` по
+рабочему набору, `innodb_doublewrite=OFF` (только стенд), `innodb_flush_method=O_DIRECT`,
+`innodb_flush_neighbors=0`, `innodb_flush_log_at_trx_commit=2`, отключённый binlog.
 
-## Ограничения
+Измерено на стенде (20 млн строк): mysql→pg 176 MB/s, pg→pg 150 MB/s,
+mssql→pg 187 MB/s, mysql→mssql 25 MB/s, любое→oracle 3,5–4,3 MB/s.
+Oracle-приёмник загружается построчно и является узким местом.
 
-- Таблицы Oracle с `BLOB` идут по двухэтапному пути и медленнее обычных
-- `bcp` / `sqlldr` получают пароль через командную строку или временный файл;
-  ограничьте доступ к хосту
-- CDC требует binlog (MySQL) или логической репликации (PostgreSQL)
-- Веб-панель только для чтения; модули переключаются при сборке
+## Проверка и CDC
+
+```bash
+./build/migrator --mode mysql2pg ... --verify-engine fnv
+./build/migrator --mode mysql2pg ... --cdc --cdc-drop-slot
+```
+
+## Частые проблемы
+
+| Симптом | Решение |
+|---|---|
+| `Lost connection to MySQL server during query` | увеличить `net_read_timeout`/`net_write_timeout` |
+| `Can't open lib 'ODBC Driver 18 for SQL Server'` | установить `msodbcsql18` и зарегистрировать в `odbcinst.ini` |
+| `ORA-12541` | проверить порт и listener |
+| `ORA-01017` | пароль со спецсимволами — использовать `password=file:PATH` |
+| `ORA-12954` | PDB достиг `MAXSIZE`, пересоздать с `STORAGE (MAXSIZE 64G)` |
 
 ## Лицензия
 
