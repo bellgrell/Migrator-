@@ -1,5 +1,7 @@
 # Documentation
 
+**English** | [中文](README.zh.md)
+
 Entry point for the published documentation. Internal working notes, benchmark
 raw data and session logs are kept out of the repository on purpose.
 
@@ -7,9 +9,9 @@ raw data and session logs are kept out of the repository on purpose.
 
 | Document | What it covers |
 |---|---|
-| [usage.md](usage.md) | every CLI parameter, DSN syntax, common recipes |
-| [dependencies.md](dependencies.md) | client libraries, ODBC drivers, bcp/sqlldr, installation |
-| [../packaging/portable/INSTALL.md](../packaging/portable/INSTALL.md) | portable package: layout, requirements, troubleshooting |
+| [usage.md](usage.md) | every CLI parameter, DSN syntax, common recipes ([中文](usage.zh.md)) |
+| [dependencies.md](dependencies.md) | client libraries, ODBC drivers, bcp/sqlldr, installation ([中文](dependencies.zh.md)) |
+| [../packaging/portable/INSTALL.md](../packaging/portable/INSTALL.md) | portable package: layout, requirements, troubleshooting ([中文](../packaging/portable/INSTALL.zh.md)) |
 
 ## Release artifacts
 

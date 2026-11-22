@@ -16,6 +16,9 @@ build-cmake/
 docs/*
 !docs/usage.md
 !docs/dependencies.md
+!docs/usage.zh.md
+!docs/dependencies.zh.md
+!docs/README.zh.md
 !docs/README.md
 bench/
 archive/

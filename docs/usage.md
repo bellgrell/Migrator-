@@ -1,309 +1,289 @@
-# mini-migrator 使用说明
+# Usage
 
-> 面向国产数据库的异构数据迁移工具（MySQL → PostgreSQL / openGauss）
+**English** | [中文](usage.zh.md)
 
-## 1. 能力总览
+Reference for every mode, parameter and file the tool touches. For a quick start
+see the [top-level README](../README.md).
 
-| 能力 | 说明 |
+## 1. Capabilities
+
+| Capability | Notes |
 |---|---|
-| 全量迁移 | MySQL 读 → PostgreSQL/openGauss 写，COPY 协议，实测 **107 万 rows/s** |
-| 表内并行 | 单表整数主键按区间切分，多连接并发读写（大表单表也能吃满 `--workers`） |
-| 表级策略 | `copy` / `rebuild` / `skip` |
-| 自动建表 | 类型映射 + 主键 + NOT NULL |
-| 二级索引迁移 | 唯一/普通索引，跨表重名自动加表名后缀 |
-| BLOB 二进制 | 字节级一致（含 NUL） |
-| 视图迁移 | MySQL CREATE VIEW → PostgreSQL CREATE OR REPLACE VIEW |
-| 校验 | 行数 + checksum（FNV-1a，可检出单行篡改） |
-| ANALYZE | 迁移后更新统计信息 |
-| CDC 增量 | binlog ROW 事件，增/改/删实时同步 |
-| CDC 轮转 | binlog 跨文件自动跟随 |
-| CDC DDL | ALTER/CREATE/DROP 基础方言转换后执行 |
-| 监控面板 | Web + Qt 桌面版 |
+| Full load | reads the source, writes the target; COPY protocol on PostgreSQL targets |
+| In-table parallelism | single integer PK split into ranges, N connections read concurrently |
+| Table policies | `copy` / `rebuild` / `skip` |
+| DDL generation | type mapping + primary key + NOT NULL |
+| Secondary indexes | unique and plain indexes, created after the data load |
+| BLOB data | byte-exact, including NUL bytes |
+| Views | MySQL `CREATE VIEW` → PostgreSQL `CREATE OR REPLACE VIEW` |
+| Verification | row count + FNV-1a checksum, detects single-row tampering |
+| ANALYZE | refresh statistics after the load |
+| CDC | binlog ROW events, insert/update/delete |
+| CDC rotation | follows binlog files across rotation |
+| CDC DDL | ALTER/CREATE/DROP with basic dialect conversion |
+| Dashboard | built-in HTTP panel |
 
-## 2. 构建
+## 2. Build
 
-    # macOS / Linux（Makefile）
-    make
+```bash
+make                                   # macOS / Linux
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+```
 
-    # 跨平台（CMake）
-    cmake -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build -j
+Output: `build/migrator`.
 
-产物：build/migrator
+## 3. Modes
 
-## 3. 运行模式
-
-| mode | 源端 | 目标端 | 可用性 |
+| Mode | Source | Target | Status |
 |---|---|---|---|
-| sim | 内置模拟 | 内置模拟 | 完整 |
-| mysql2pg | MySQL | PostgreSQL | 完整（推荐） |
-| mysql2og | MySQL | openGauss | 完整 |
-| pg2mysql | PostgreSQL | MySQL | 完整（视图暂不支持） |
-| pg2og | PostgreSQL | openGauss | 完整 |
-| og2pg | openGauss | PostgreSQL | 完整 |
-| og2mysql | openGauss | MySQL | 完整（视图暂不支持） |
-| mysql2mysql | MySQL | MySQL | 完整 |
-| mysql2opengauss | MySQL | openGauss | mysql2og 的别名 |
-| mysql2mssql | MySQL | SQL Server | 完整（bcp 通道） |
-| mssql2mysql | SQL Server | MySQL | 完整 |
-| mssql2mssql | SQL Server | SQL Server | 完整（bcp 通道） |
-| mysql2oracle | MySQL | Oracle | 完整（sqlldr 通道） |
-| oracle2mysql | Oracle | MySQL | 完整 |
-| oracle2oracle | Oracle | Oracle | 完整（sqlldr 通道） |
+| `sim` | built-in | built-in | complete |
+| `mysql2pg` | MySQL | PostgreSQL | complete |
+| `mysql2og` | MySQL | openGauss | complete |
+| `pg2mysql` | PostgreSQL | MySQL | complete (views unsupported) |
+| `pg2og` | PostgreSQL | openGauss | complete |
+| `og2pg` | openGauss | PostgreSQL | complete |
+| `og2mysql` | openGauss | MySQL | complete (views unsupported) |
+| `mysql2mysql` | MySQL | MySQL | complete |
+| `mysql2mssql` | MySQL | SQL Server | complete (`bcp` channel) |
+| `mssql2mysql` | SQL Server | MySQL | complete |
+| `mssql2mssql` | SQL Server | SQL Server | complete (`bcp` channel) |
+| `mysql2oracle` | MySQL | Oracle | complete (`sqlldr` channel) |
+| `oracle2mysql` | Oracle | MySQL | complete |
+| `oracle2oracle` | Oracle | Oracle | complete (`sqlldr` channel) |
 
-也可用 --source-type / --target-type 显式指定 mysql|pg|og|mssql|oracle，覆盖 mode。
+Override the kinds with `--source-type` / `--target-type`
+(`mysql|pg|og|mssql|oracle`).
 
-## 3.1 ODBC 目标与批量装载
+### 3.1 ODBC targets and bulk loading
 
-SQL Server 与 Oracle 通过 ODBC 接入，DSN 必须带 driver=，否则会回退到默认驱动（FreeTDS /
-Oracle in instantclient_23_x）并连接失败：
+SQL Server and Oracle are reached through ODBC. The DSN **must** carry
+`driver=`, otherwise the default driver is used and the connection fails:
 
-    --target "host=127.0.0.1;port=1433;user=sa;password=...;db=bench_dst;driver=ODBC Driver 18 for SQL Server"
-    --target "host=127.0.0.1;port=1521;user=bench_dst;password=...;db=FREEPDB1;driver=Oracle 23 ODBC Driver"
+```bash
+--target "host=127.0.0.1;port=1433;user=sa;password=***;db=bench_dst;driver=ODBC Driver 18 for SQL Server"
+--target "host=127.0.0.1;port=1521;user=bench_dst;password=***;db=FREEPDB1;driver=Oracle 23 ODBC Driver"
+```
 
-驱动名与批量装载器路径可在 config/providers.ini 配置（优先级：环境变量 > 文件 > 自动探测）：
+Driver names and loader paths live in `config/providers.ini`
+(precedence: environment > file > auto-detect):
 
-    mssql_driver=ODBC Driver 18 for SQL Server
-    oracle_driver=Oracle 23 ODBC Driver
-    bcp_path=
-    sqlldr_path=
+```ini
+mssql_driver=ODBC Driver 18 for SQL Server
+oracle_driver=Oracle 23 ODBC Driver
+bcp_path=
+sqlldr_path=
+```
 
-安装完成后运行 ./build/migrator doctor 检查驱动注册、客户端库与工具可用性。
+When `bcp` or `sqlldr` is detected the bulk channel is enabled; otherwise the
+tool falls back to row-by-row SQL. Oracle `BLOB` columns use a two-stage path
+(hex staging table + `TO_BLOB(HEXTORAW(...))`), converted after every batch so
+the last batch is never lost.
 
-检测到 bcp / sqlldr 时启用批量通道；缺失则回退逐行 SQL。Oracle 的 BLOB 列走两段式
-（十六进制暂存表 + TO_BLOB(HEXTORAW())），每批写入后立即转换，避免尾批丢失。
+## 4. Parameters
 
-实测（505 万行 / 7 表）：bcp 35.8 s、sqlldr 133.7 s；对应回退路径为 233 s 与 1285 s。
-
-## 4. 参数总表
-
-| 参数 | 默认 | 作用 |
+| Parameter | Default | Purpose |
 |---|---|---|
-| --mode | sim | 运行模式 |
-| --source | 空 | 源库 DSN |
-| --target | 空 | 目标库 DSN |
-| --rows | 200000 | 模拟总行数（仅 sim） |
-| --tables | 4 | 模拟表数（仅 sim） |
-| --batch | 1000 | 每批行数 |
-| --commit | 10 | 每 N 批提交 |
-| --source-type | 按 mode | 源类型：mysql/pg/og |
-| --target-type | 按 mode | 目标类型：mysql/pg/og |
-| --workers | 1 | 并行线程数（按表并行；大单表自动按主键区间并行） |
-| --pk-min-rows | 1000000 | 触发表内主键区间并行的最小行数 |
-| --no-pk-parallel | 关 | 关闭单表主键区间并行 |
-| --log-every | 10 | 每 N 批记一条日志 |
-| --out-dir | out | 日志导出目录 |
-| --throttle | 0 | 每批休眠毫秒 |
-| --io-scheduler | fair | 批 I/O 调度：off/fair/scan |
-| --io-queue-depth | 0 | 并发读批次数（0 = workers） |
-| --io-prefetch | 0 | 每区间预取批数（0 = 关闭） |
-| --io-window | 0 | SCAN 模式的区间窗口（0 = 自动） |
-| --load-mode | auto | MySQL 目标 LOAD DATA：auto/insert/ignore/replace |
-| --port | 8123 | 面板端口 |
-| --type-map | config/type_map.json | 类型映射 |
-| --tables-config | config/tables.json | 表级策略 |
-| --no-index | 关 | 不迁二级索引 |
-| --no-analyze | 关 | 不执行 ANALYZE |
-| --no-copy | 关 | 回退 INSERT 模式 |
-| --no-checksum | 关 | 只比行数 |
-| --no-verify | 关 | 跳过校验 |
-| --verify-only | 关 | 只校验不迁移 |
-| --with-views | 关 | 迁移视图 |
-| --cdc | 关 | 迁移后持续增量 |
-| --cdc-only | 关 | 只跑增量 |
-| --cdc-ddl | 关 | 同步 DDL |
-| --cdc-start | 空 | 起始位点 file:pos |
-| --cdc-server-id | 987654321 | 复制客户端 server_id |
-| --cdc-max-events | 0 | 应用 N 个事件后退出（0=不限） |
-| --exit | 关 | 迁移完退出 |
+| `--mode` | `sim` | migration mode |
+| `--source` | empty | source DSN |
+| `--target` | empty | target DSN |
+| `--rows` | 200000 | simulated rows (sim only) |
+| `--tables` | 4 | simulated tables (sim only) |
+| `--batch` | 1000 | rows per batch |
+| `--commit` | 10 | commit every N batches |
+| `--source-type` | from mode | `mysql/pg/og/mssql/oracle` |
+| `--target-type` | from mode | `mysql/pg/og/mssql/oracle` |
+| `--workers` | 1 | parallel workers; large single tables use PK ranges |
+| `--pk-min-rows` | 1000000 | minimum rows to trigger PK-range parallelism |
+| `--no-pk-parallel` | off | disable in-table parallelism |
+| `--log-every` | 10 | log every N batches |
+| `--out-dir` | out | log directory |
+| `--throttle` | 0 | sleep milliseconds per batch |
+| `--io-scheduler` | fair | batch I/O policy: `off/fair/scan` |
+| `--io-queue-depth` | 0 | concurrent read batches (0 = workers) |
+| `--io-prefetch` | 0 | prefetch batches per range (0 = off) |
+| `--io-window` | 0 | range window for `scan` (0 = auto) |
+| `--load-mode` | auto | MySQL target: `auto/insert/ignore/replace` |
+| `--port` | 8123 | dashboard port |
+| `--type-map` | config/type_map.json | type mapping |
+| `--tables-config` | config/tables.json | per-table policy |
+| `--no-index` | off | skip secondary indexes |
+| `--no-analyze` | off | skip ANALYZE |
+| `--no-copy` | off | fall back to INSERT |
+| `--no-checksum` | off | compare row counts only |
+| `--no-verify` | off | skip verification |
+| `--verify-only` | off | verify without migrating |
+| `--with-views` | off | migrate views |
+| `--cdc` | off | keep streaming after the load |
+| `--cdc-only` | off | streaming only |
+| `--cdc-ddl` | off | replicate DDL |
+| `--cdc-start` | empty | starting position `file:pos` |
+| `--cdc-server-id` | 987654321 | replication client `server_id` |
+| `--cdc-max-events` | 0 | exit after N events (0 = unlimited) |
+| `--exit` | off | exit when the migration finishes |
 
-批 I/O 调度只作用于单表主键区间并行：`fair`（默认）按 FIFO 轮转分派读请求并限制在途批读数量；`scan` 只放行主键窗口内的区间，适合按主键聚簇存储的源表；`off` 关闭。`--io-prefetch` 增加每区间读前缓冲（读线程与写线程重叠），默认关闭；远程数据库下通常没有收益。调度器不控制数据库服务端的物理磁盘调度。
+The I/O scheduler only applies to in-table PK-range parallelism: `fair`
+(default) dispatches reads round-robin and caps in-flight batches; `scan`
+admits ranges inside the PK window, which suits clustered sources; `off`
+disables it. It does not control the database server's physical disk schedule.
 
-## 5. 典型用法
+## 5. Examples
 
-    # 模拟（无需数据库）
-    ./build/migrator --mode sim --rows 600000 --tables 6 --throttle 200
+```bash
+# simulation, no database required
+./build/migrator --mode sim --rows 600000 --tables 6 --throttle 200
 
-    # 全量迁移
-    ./build/migrator --mode mysql2pg \
-      --source "host=127.0.0.1;port=3306;user=root;db=demo" \
-      --target "host=127.0.0.1;port=5432;user=postgres;db=demo_dst" \
-      --batch 2000 --workers 4 --with-views
+# full load
+./build/migrator --mode mysql2pg \
+  --source "host=127.0.0.1;port=3306;user=root;db=demo" \
+  --target "host=127.0.0.1;port=5432;user=postgres;db=demo_dst" \
+  --batch 2000 --workers 4 --with-views
 
-    # 全量 + 持续增量 + DDL
-    ./build/migrator --mode mysql2pg ... --cdc --cdc-ddl
+# full load + CDC + DDL
+./build/migrator --mode mysql2pg ... --cdc --cdc-ddl
 
-    # 只跑增量
-    ./build/migrator --mode mysql2pg ... --cdc-only --cdc-ddl
+# streaming only
+./build/migrator --mode mysql2pg ... --cdc-only --cdc-ddl
 
-    # 事后核查
-    ./build/migrator --mode mysql2pg ... --verify-only
+# verify an existing target
+./build/migrator --mode mysql2pg ... --verify-only
+```
 
-## 6. 表级策略（config/tables.json）
+## 6. Table policies
 
-    {
-      "tables": {
-        "daily_stats": "rebuild:sql/daily_stats.sql",
-        "tmp_cache": "skip"
-      }
-    }
+`config/tables.json`:
 
-| 策略 | 行为 |
+```json
+{
+  "tables": {
+    "daily_stats": "rebuild:sql/daily_stats.sql",
+    "tmp_cache": "skip"
+  }
+}
+```
+
+| Policy | Behaviour |
 |---|---|
-| copy（默认） | 建表 + 迁数据 + 建索引 |
-| rebuild | 不迁数据，迁移后执行指定 SQL 重建 |
-| skip | 完全跳过 |
+| `copy` (default) | create table, load data, build indexes |
+| `rebuild` | skip data, run the given SQL after the load |
+| `skip` | ignore the table |
 
-## 7. 类型映射（config/type_map*.json）
+## 7. Type mapping
 
-按方向自动选择：
+Selected automatically by direction:
 
-| 方向 | 文件 |
+| Direction | File |
 |---|---|
-| MySQL → PG/openGauss | config/type_map.json（默认） |
-| MySQL → MySQL | config/type_map.mysql.json |
-| PG/openGauss → PG/openGauss | config/type_map.pg.json |
-| PG/openGauss → MySQL | config/type_map.pg2mysql.json |
+| MySQL → PG/openGauss | `config/type_map.json` |
+| MySQL → MySQL | `config/type_map.mysql.json` |
+| PG/openGauss → PG/openGauss | `config/type_map.pg.json` |
+| PG/openGauss → MySQL | `config/type_map.pg2mysql.json` |
 
-`--type-map <path>` 可显式覆盖。
+`--type-map <path>` overrides the choice.
 
-    {
-      "global":  { "varchar": "varchar{args}", "datetime": "timestamp" },
-      "columns": { "users.bio": "text" }
-    }
+```json
+{
+  "global":  { "varchar": "varchar{args}", "datetime": "timestamp" },
+  "columns": { "users.bio": "text" }
+}
+```
 
-两级：全局类型 + 列级覆盖；{args} 由源类型参数替换。
+Two levels: global types plus per-column overrides; `{args}` is replaced by the
+source type arguments.
 
-## 8. 索引迁移
+## 8. Index migration
 
-读取 information_schema.STATISTICS，数据导入完成后批量 CREATE INDEX。
-PostgreSQL 索引名在 schema 内唯一，跨表重名自动改为 <name>_<table>。
+Reads `information_schema.STATISTICS` and issues `CREATE INDEX` after the data
+load. PostgreSQL index names are schema-unique, so duplicates get a
+`_<table>` suffix.
 
-## 9. 视图迁移（--with-views）
+## 9. Views
 
-抽取 SHOW CREATE VIEW，做基础转换：
+`--with-views` extracts `SHOW CREATE VIEW` and converts:
 
-- 剥离 ALGORITHM / DEFINER / SQL SECURITY
-- 反引号 → 双引号
-- IFNULL → COALESCE、NOW()/CURDATE()/LENGTH() 归一
-- 单条失败用 SAVEPOINT 隔离，不影响其他对象
+- strips `ALGORITHM` / `DEFINER` / `SQL SECURITY`
+- backticks → double quotes
+- `IFNULL` → `COALESCE`, normalises `NOW()` / `CURDATE()` / `LENGTH()`
+- a failing view is isolated with `SAVEPOINT`
 
-## 10. CDC 增量同步
+## 10. CDC
 
-基于 binlog（要求 log_bin=ON、binlog_format=ROW）。
+Requires `log_bin=ON` and `binlog_format=ROW`.
 
-事件流：GTID → QUERY → TABLE_MAP → WRITE/UPDATE/DELETE_ROWS → XID
+Event flow: GTID → QUERY → TABLE_MAP → WRITE/UPDATE/DELETE_ROWS → XID
 
-应用方式：
+Application:
 
-- INSERT / UPDATE → INSERT ... ON CONFLICT (pk) DO UPDATE
-- DELETE → DELETE WHERE pk = ...
+- INSERT / UPDATE → `INSERT ... ON CONFLICT (pk) DO UPDATE`
+- DELETE → `DELETE WHERE pk = ...`
 
-支持列类型：TINY/SHORT/LONG/INT24/LONGLONG/YEAR/FLOAT/DOUBLE/NEWDECIMAL/
-VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2。
+Supported column types: TINY/SHORT/LONG/INT24/LONGLONG/YEAR/FLOAT/DOUBLE/
+NEWDECIMAL/VARCHAR/VAR_STRING/STRING/BLOB/TEXT/JSON/DATE/DATETIME2/TIMESTAMP2.
 
-位点保存在 out/cdc-position.txt，重启自动续传；自动跟随 binlog 轮转。
+The position is stored in `out/cdc-position.txt`; restart resumes automatically
+and follows binlog rotation.
 
-## 11. 校验
+## 11. Verification
 
-- 行数：源/目标逐表比对
-- checksum：逐行规范化后 FNV-1a，聚合 sum + xor（顺序无关）
-- 可检出“行数一致但内容被改”的情况
+- row counts compared table by table
+- checksum: per-row normalisation then FNV-1a, aggregated with sum + xor
+  (order-independent)
+- detects "same row count, modified content"
 
-## 12. Web 面板 API
+## 12. Dashboard API
 
-| 端点 | 内容 |
+| Endpoint | Content |
 |---|---|
-| / | 面板 |
-| /api/status | 进度/吞吐/ETA/错误/校验 |
-| /api/tables | 每表明细 |
-| /api/series | 吞吐序列 |
-| /api/events | 事件日志 |
-| /api/health | 健康检查 |
+| `/` | dashboard |
+| `/api/status` | progress, throughput, ETA, errors, verification |
+| `/api/tables` | per-table details |
+| `/api/series` | throughput series |
+| `/api/events` | event log |
+| `/api/health` | health check |
 
-## 13. Qt 桌面版
+## 13. Output artifacts
 
-    cd qt && mkdir -p build && cd build
-    /Users/bellgrell/Qt/6.11.1/macos/bin/qmake ../migrator_gui.pro
-    make -j4
-
-从项目根目录启动（需读取 config/ 与 web/）：
-
-    ./qt/build/migrator_gui.app/Contents/MacOS/migrator_gui
-
-## 14. 输出产物
-
-| 产物 | 位置 |
+| Artifact | Location |
 |---|---|
-| 迁移日志 | out/migration-YYYYmmdd-HHMMSS.log |
-| CDC 位点 | out/cdc-position.txt |
-| 面板 | http://127.0.0.1:<port>/ |
+| migration log | `out/migration-YYYYmmdd-HHMMSS.log` |
+| CDC position | `out/cdc-position.txt` |
+| dashboard | `http://127.0.0.1:<port>/` |
 
-## 15. 已知限制
+## 14. Known limitations
 
-| 限制 | 说明 |
+| Limitation | Detail |
 |---|---|
-| CDC 需要主键 | 无主键表跳过 |
-| 部分列类型不支持 | BIT / ENUM / SET / GEOMETRY |
-| DDL 方言转换有限 | DATE_FORMAT/GROUP_CONCAT/LIMIT x,y/分区语法需人工改写 |
-| DM8 未实现 | 保留接口 |
-| openGauss 需 md5 认证 | 默认 sha256 不被原生 libpq 支持，见第 16 节 |
-| 目标表需为空或已对齐 | 直接重跑会撞主键 |
-| 修复内存 | 整数主键流式归并 O(batch)；非整数主键仍用集合比较 |
-| I/O 调度器只管客户端批读 | 物理磁盘调度仍由 OS/数据库引擎负责 |
-| 区间并行需单列整数主键 | MySQL / PostgreSQL / openGauss 源均支持；`--resume` 与 `--consistent-snapshot` 自动退回顺序读取 |
-| Oracle BLOB 表 | 两段式装载，速度低于普通表 |
-| bcp / sqlldr 凭据 | 通过命令行或临时文件传递，需限制主机访问 |
-| macOS CI | 自动构建仅覆盖 Linux；macOS 需手动触发 workflow_dispatch |
+| CDC needs a primary key | tables without a PK are skipped |
+| Unsupported column types | BIT / ENUM / SET / GEOMETRY |
+| Limited DDL conversion | `DATE_FORMAT`/`GROUP_CONCAT`/`LIMIT x,y`/partition syntax need manual edits |
+| openGauss authentication | default `sha256` is not supported by native libpq, see section 15 |
+| Target must be empty or aligned | re-running against partially loaded tables hits primary keys |
+| Verification memory | integer PKs stream and merge in O(batch); other PK types use set comparison |
+| I/O scheduler is client-side only | physical disk scheduling stays with the OS / engine |
+| Range parallelism needs a single integer PK | supported for MySQL / PostgreSQL / openGauss; `--resume` and `--consistent-snapshot` fall back to sequential reads |
+| Oracle BLOB tables | two-stage load, slower than plain tables |
+| bcp / sqlldr credentials | passed via command line or a temporary file; restrict host access |
 
-## 16. openGauss 对接
+## 15. openGauss notes
 
-> 已在 openGauss 6.0.0（Docker `enmotech/opengauss:latest`，aarch64）实测：
-> 10 万行迁移 + checksum PASS，511 万行 11.33s（451k rows/s）+ 区间并行 PASS，视图迁移 PASS，
-> CDC 增/删/改 + DDL 同步 PASS（5 事件、0 错误）。
+Use `--mode mysql2og` (alias `mysql2opengauss`). Create the target database in
+PG compatibility mode:
 
-模式：`--mode mysql2og`（MySQL → openGauss），`mysql2opengauss` 为别名；
-`--mode opengauss` 仅目标端。
+```sql
+CREATE DATABASE og_dst WITH ENCODING='UTF8' DBCOMPATIBILITY='PG';
+```
 
-    ./build/migrator --mode mysql2og \
-      --source "host=127.0.0.1;port=3306;user=root;db=demo" \
-      --target "host=127.0.0.1;port=5432;user=gaussdb;password=...;db=og_dst" \
-      --batch 2000 --workers 4
+If the server only allows `sha256` authentication, switch the migration account
+to md5:
 
-创建目标库时建议显式用 PG 兼容模式（A 模式会把 `''` 当 NULL）：
+```sql
+ALTER SYSTEM SET password_encryption_type = 0;
+ALTER USER migrator IDENTIFIED BY '...';
+-- pg_hba.conf: host all all 0.0.0.0/0 md5
+SELECT pg_reload_conf();
+```
 
-    CREATE DATABASE og_dst WITH ENCODING='UTF8' DBCOMPATIBILITY='PG';
-
-认证注意事项：
-
-- 原生 libpq 支持 md5 / scram；部分 openGauss 版本默认 `sha256`，会报
-  `unsupported authentication method`。遇到时把迁移账号改为 md5（6.0.0 容器镜像
-  实测可直接用密码连接，无需改）：
-
-      ALTER SYSTEM SET password_encryption_type = 0;
-      -- 重新设置一次密码，才会以 md5 存储
-      ALTER USER migrator IDENTIFIED BY '...';
-      -- pg_hba.conf: host all all 0.0.0.0/0 md5
-      SELECT pg_reload_conf();
-
-- 或者改用 openGauss 自带的 libpq 重新链接本工具（默认用系统 libpq）。
-
-已做的兼容处理：
-
-- 连接后执行 `SELECT version()`，日志会标明实际是 openGauss 还是 PostgreSQL；
-- 会话固定 `client_encoding=UTF8`、`standard_conforming_strings=on`；
-- checksum 校验的游标优先 `NO SCROLL`，失败自动降级；
-- COPY / SAVEPOINT / ANALYZE / 索引迁移与 PostgreSQL 路径一致；
-- 布尔值 COPY 输出改为 `true`/`false`，两边都兼容；
-- openGauss 的 numeric 默认输出 `.17`（省略前导 0），连接时设
-  `behavior_compat_options='display_leading_zero'`，checksum 才不会假阳性。
-
-CDC 差异处理：
-
-- openGauss 不支持 `INSERT ... ON CONFLICT`，增量更新改为同一事务内
-  `DELETE` + `INSERT`（幂等）；
-- binlog QUERY 事件尾部带 CRC32，解析时已扣除，否则 DDL 末尾会多出垃圾字符；
-- DDL 执行后清空 schema 缓存，下个事件重新读列，避免新增列被静默丢弃。
-
-已知限制：openGauss 需要在目标库开启 PG 兼容模式；JDBC 驱动/ssl 认证等
-高级选项不在本工具范围内（只使用 libpq 基础能力）。
+Compatibility handled by the tool: `client_encoding=UTF8`,
+`standard_conforming_strings=on`, boolean COPY output as `true`/`false`,
+`behavior_compat_options='display_leading_zero'` so numerics compare correctly,
+`NO SCROLL` cursors with fallback, and DELETE+INSERT instead of
+`ON CONFLICT` for CDC updates.

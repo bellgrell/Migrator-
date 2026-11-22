@@ -1,5 +1,7 @@
 # migrator 1.0.0 - Linux x86-64 portable package
 
+**English** | [中文](INSTALL.zh.md)
+
 No Docker required. The tool is a native binary that talks to databases over TCP.
 
 ## Layout
