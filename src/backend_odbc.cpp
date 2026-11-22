@@ -808,7 +808,9 @@ class OdbcTarget : public OdbcConn, public ITarget {
       }
       out += ")\n";
     }
-    out += ");";
+    out += ")";
+    if (kind_ == "oracle") out += " NOLOGGING";
+    out += ";";
     return out;
   }
 
@@ -931,7 +933,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
         bcp_schema_[table] = s;
         auto& buf = bcp_buf_[table];
         buf.insert(buf.end(), rows.begin(), rows.end());
-        if (buf.size() >= 100000) {
+        if (buf.size() >= 500000) {
           Status st = flush_pending_locked(table);
           if (!st.ok()) return st;
         }
@@ -954,7 +956,7 @@ class OdbcTarget : public OdbcConn, public ITarget {
     const size_t kChunk = 1000;
     if (kind_ == "oracle") {
       // 优先数组绑定（一次执行 N 行）；不支持时回退到 INSERT ALL 字面量
-      Status ab = insert_batch_array(table, s, rows, 500);
+      Status ab = insert_batch_array(table, s, rows, 2000);
       if (!ab.ok() && ab.code != Code::kUnsupported) return ab;
       if (!ab.ok()) {
         for (size_t start = 0; start < rows.size(); start += kChunk) {
