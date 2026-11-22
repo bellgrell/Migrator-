@@ -121,7 +121,7 @@ Measured on a 62 GB / NVMe host with a 20M-row dataset:
 | pg → pg | 150 MB/s |
 | mssql → pg | 187 MB/s |
 | mysql → mssql | 25 MB/s |
-| \* → oracle | 3.5–4.3 MB/s |
+| \* → oracle | ~8 MB/s (NOLOGGING + array binding) |
 
 Oracle targets load row by row and are the bottleneck of the matrix; budget time
 or enable `sqlldr`.

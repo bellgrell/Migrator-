@@ -118,7 +118,7 @@ net_write_timeout=3600
 | pg → pg | 150 MB/s |
 | mssql → pg | 187 MB/s |
 | mysql → mssql | 25 MB/s |
-| \* → oracle | 3.5–4.3 MB/s |
+| \* → oracle | ~8 MB/s（NOLOGGING + 数组绑定后） |
 
 Oracle 目标端逐行装载，是整个矩阵的瓶颈；若目标是 Oracle，请预留时间或启用 `sqlldr`。
 

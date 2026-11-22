@@ -66,7 +66,7 @@ cd migrator-1.0.0-linux-x64
 | pg → pg | 150 MB/s |
 | mssql → pg | 187 MB/s |
 | mysql → mssql | 25 MB/s |
-| любое → oracle | 3,5–4,3 MB/s |
+| любое → oracle | ~8 MB/s (после NOLOGGING и array binding) |
 
 Для приёмника MySQL критичны `innodb_buffer_pool_size` по рабочему набору,
 `innodb_doublewrite=OFF` (стенд), `innodb_flush_method=O_DIRECT`,
