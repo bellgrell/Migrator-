@@ -2,6 +2,8 @@
 
 [English](README.md) | **中文** | [Русский](README.ru.md)
 
+[![Release](https://img.shields.io/github/v/release/bellgrell/Migrator-?display_name=tag&sort=semver&label=release)](https://github.com/bellgrell/Migrator-/releases/latest) [![Platform](https://img.shields.io/badge/platform-linux%20x86--64-blue)](https://github.com/bellgrell/Migrator-/releases/latest) [![License](https://img.shields.io/github/license/bellgrell/Migrator-)](LICENSE)
+
 原生 C++17 编写的异构数据库迁移工具，支持 **MySQL、PostgreSQL、openGauss、
 SQL Server、Oracle** 之间的全量迁移、校验、断点续传与 CDC。单个二进制文件，
 不依赖 Docker、Python 或任何外部服务。

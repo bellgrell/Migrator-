@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh.md) | **Русский**
 
+[![Release](https://img.shields.io/github/v/release/bellgrell/Migrator-?display_name=tag&sort=semver&label=release)](https://github.com/bellgrell/Migrator-/releases/latest) [![Platform](https://img.shields.io/badge/platform-linux%20x86--64-blue)](https://github.com/bellgrell/Migrator-/releases/latest) [![License](https://img.shields.io/github/license/bellgrell/Migrator-)](LICENSE)
+
 Нативный инструмент на C++17 для переноса данных между **MySQL, PostgreSQL,
 openGauss, SQL Server и Oracle**: полная загрузка, проверка, докачка и CDC.
 Один бинарный файл — без Docker, без Python, без внешних сервисов.

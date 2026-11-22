@@ -2,6 +2,8 @@
 
 **English** | [中文](README.zh.md) | [Русский](README.ru.md)
 
+[![Release](https://img.shields.io/github/v/release/bellgrell/Migrator-?display_name=tag&sort=semver&label=release)](https://github.com/bellgrell/Migrator-/releases/latest) [![Platform](https://img.shields.io/badge/platform-linux%20x86--64-blue)](https://github.com/bellgrell/Migrator-/releases/latest) [![License](https://img.shields.io/github/license/bellgrell/Migrator-)](LICENSE)
+
 A native C++17 tool for migrating data between **MySQL, PostgreSQL, openGauss,
 SQL Server and Oracle** — full loads, verification, resume, and CDC. It is a
 single binary: no Docker, no Python, no external services.
