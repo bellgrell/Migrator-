@@ -4,34 +4,66 @@
 
 [![Release](https://img.shields.io/github/v/release/bellgrell/Migrator-?display_name=tag&sort=semver&label=release)](https://github.com/bellgrell/Migrator-/releases/latest) [![Platform](https://img.shields.io/badge/platform-linux%20x86--64-blue)](https://github.com/bellgrell/Migrator-/releases/latest) [![License](https://img.shields.io/github/license/bellgrell/Migrator-)](LICENSE)
 
-A native C++17 tool for migrating data between **MySQL, PostgreSQL, openGauss,
-SQL Server and Oracle** — full loads, verification, resume, and CDC. It is a
-single binary: no Docker, no Python, no external services.
+> One binary that moves data from database A to database B. No Docker, no Python, no middleware.
 
-```bash
-./run.sh --mode mysql2pg --source "db=app;host=10.0.0.5;user=reader;password=env:SRC_PW" \
-                             --target "host=10.0.0.9;user=postgres;db=app_dst;password=env:DST_PW" \
-         --batch 5000 --commit 10 --workers 4
-```
+mini-migrator is a C++17 migration tool for **MySQL, PostgreSQL, openGauss,
+SQL Server and Oracle**. It runs 13 native directions, verifies row counts and
+checksums, parallelises large tables by primary-key ranges, resumes from a
+watermark, streams changes via CDC, and reports throughput and write
+amplification from a built-in read-only dashboard.
 
 ## Why it exists
 
-Moving data between heterogeneous databases is usually a choice between a slow
-row-by-row script and a vendor tool that only understands two databases. This
-tool does one job: copy a schema and its data as fast as the target can absorb
-it, verify the result, and tell you honestly what happened.
+Cross-database migration usually offers two choices: a row-by-row script that is
+slow and hammers the target, or a vendor tool that understands two databases and
+costs a licence. This project does one job — **copy the schema and the data as
+fast as the target can absorb it, then tell you honestly what happened**: rows
+moved, verification result, write amplification, which table failed.
 
-## Highlights
+## Features
 
-- **13 native modes** across five databases; any other pair via `--source-type` / `--target-type`
-- **Row-count + checksum verification** (FNV, or the mmv digest where the dialect supports it)
-- **Primary-key range parallelism**: one large table is split by PK bounds and copied by N workers
-- **Adaptive MySQL target loading**: `LOAD DATA` for narrow rows, multi-row `INSERT` for wide rows
-- **Resume** from a primary-key watermark; `--verify-async` keeps verification off the critical path
+- **13 native directions** across five databases; any other pair via `--source-type` / `--target-type`
+- **Primary-key range parallelism** — split a large table by PK bounds, read with N workers
+- **Adaptive MySQL loading** — `LOAD DATA` for narrow rows, multi-row `INSERT` above 512 B/row
+- **Row-count + checksum verification** — FNV or the mmv digest, detects single-row tampering
+- **Resume** from a PK watermark; `--verify-async` keeps verification off the critical path
 - **CDC** from MySQL binlog and PostgreSQL logical replication, optional DDL sync
-- **Built-in web dashboard** (Chinese / English / Russian) with audit log and TLS
-- **`doctor`** self-check for client libraries, ODBC drivers and bulk loaders
-- **No runtime dependencies beyond client libraries** — no Docker required
+- **Observability** — throughput (MB/s), rows/s, read/write amplification, peak RSS, target memory
+- **Single-binary deployment** — the release is a Docker-free portable package
+
+## Quick start
+
+### Download
+
+Grab `migrator-1.0.0-linux-x64.tar.gz` from
+[Releases](https://github.com/bellgrell/Migrator-/releases/latest), verify, unpack:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+tar -xzf migrator-1.0.0-linux-x64.tar.gz
+cd migrator-1.0.0-linux-x64
+./run.sh doctor        # environment self-check
+```
+
+### Run a migration
+
+```bash
+./run.sh --mode mysql2pg \
+  --source "db=app;host=10.0.0.5;port=3306;user=reader;password=***" \
+  --target "host=10.0.0.9;port=5432;user=postgres;db=app_dst;password=***" \
+  --batch 5000 --commit 10 --workers 4 --truncate --verify-async
+```
+
+Credentials can be `password=env:VAR` or `password=file:PATH`. When the DSN
+contains `driver=`, the `password=` key must come **last**.
+
+### Build from source
+
+```bash
+sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+  libmysqlclient-dev libpq-dev unixodbc-dev libssl-dev
+make -j4
+```
 
 ## Supported directions
 
@@ -51,117 +83,22 @@ it, verify the result, and tell you honestly what happened.
 | `oracle2mysql` | Oracle | MySQL | full load |
 | `oracle2oracle` | Oracle | Oracle | `sqlldr` channel |
 
-Any other pair can be expressed by overriding the kinds:
+Any other pair:
 
 ```bash
-./build/migrator --mode mysql2pg --source-type oracle --target-type pg ...
+./run.sh --mode mysql2pg --source-type oracle --target-type pg ...
 ```
-
-## Install
-
-### Portable package (recommended, no Docker)
-
-```bash
-tar -xzf migrator-1.0.0-linux-x64.tar.gz
-cd migrator-1.0.0-linux-x64
-./run.sh doctor          # environment self-check
-./run.sh --help
-```
-
-The archive contains the binary, bundled client libraries (`libmysqlclient`,
-`libpq`, `unixODBC`) and the type-map configuration. Build it yourself with:
-
-```bash
-bash packaging/build-portable.sh 1.0.0
-```
-
-Requirements on the target host: Linux x86-64 with glibc 2.39+ and TCP access to
-the databases. ODBC drivers are needed only for SQL Server (`msodbcsql18`) and
-Oracle (Instant Client + ODBC).
-
-### From source
-
-```bash
-sudo apt-get install -y build-essential cmake ninja-build pkg-config \
-  libmysqlclient-dev libpq-dev unixodbc-dev libssl-dev
-make -j4            # or: cmake -S . -B build -G Ninja && cmake --build build -j
-```
-
-macOS:
-
-```bash
-brew install mysql-client libpq unixodbc openssl@3
-make -j4
-```
-
-### Debian package / container
-
-```bash
-bash packaging/build-deb.sh
-sudo dpkg -i mini-migrator_0.9.0_amd64.deb
-```
-
-A Docker image exists for CI convenience only; the binary itself does not need it.
-
-## Usage
-
-### DSN
-
-```
-key=value;key=value;...
-```
-
-| Key | Meaning |
-|---|---|
-| `host`, `port` | server address |
-| `user`, `password` | credentials; `password=env:VAR` and `password=file:PATH` are supported |
-| `db` | database / service name |
-| `driver` | ODBC driver name, required for SQL Server and Oracle |
-
-Put `password=` **last** when a `driver=` key is present — the parser consumes
-the rest of the string as the password value.
-
-### A typical run
-
-```bash
-./build/migrator --mode mysql2oracle \
-  --source "db=erp;host=10.0.0.5;port=3306;user=reader;password=env:SRC_PW" \
-  --target "host=10.0.0.9;port=1521;user=ERP;db=FREEPDB1;driver=Oracle 23 ODBC Driver;password=env:DST_PW" \
-  --batch 5000 --commit 10 --workers 4 --truncate --verify-async
-```
-
-### Common parameters
-
-| Parameter | Default | Description |
-|---|---|---|
-| `--mode` | `sim` | migration mode |
-| `--source` / `--target` | — | DSN strings |
-| `--batch` | 1000 | rows per batch |
-| `--commit` | 10 | commit every N batches |
-| `--workers` | 1 | parallel workers / PK ranges |
-| `--pk-min-rows` | 1000000 | table size that triggers PK-range parallelism |
-| `--truncate` | off | drop target tables before loading |
-| `--load-mode` | `auto` | MySQL target: `auto` / `insert` / `ignore` / `replace` |
-| `--io-scheduler` | `fair` | `off` / `fair` / `scan` batch I/O policy |
-| `--no-verify` | off | skip row-count and checksum verification |
-| `--verify-async` | off | verify after the load finishes |
-| `--resume` | off | continue from a PK watermark |
-| `--cdc` | off | keep applying changes after the full load |
-| `--tables-config` | — | per-table policy: `copy` / `rebuild:file.sql` / `skip` |
-| `--type-map` | `config/type_map.json` | DDL type mapping |
-| `--port` | 8123 | dashboard port |
 
 ## Performance
 
-Two things dominate throughput: how the target commits, and how the data is
-inserted.
+Two things dominate throughput: **how the target commits** and **how rows are inserted**.
 
-**Server-side settings that matter most** (MySQL target):
+The settings that matter most on a MySQL target:
 
 ```ini
 [mysqld]
-innodb_buffer_pool_size=16G     # size to the working set, not the row count
-innodb_doublewrite=OFF          # benchmark/lab only
+innodb_buffer_pool_size=16G
+innodb_doublewrite=OFF
 innodb_flush_method=O_DIRECT
 innodb_flush_neighbors=0
 innodb_io_capacity=2000
@@ -173,11 +110,10 @@ net_read_timeout=3600
 net_write_timeout=3600
 ```
 
-On the tool side: raise `--commit` (fewer fsyncs), keep `--workers` at 4–8, and
-leave `--load-mode auto` — it switches wide rows to multi-row INSERT, which
-avoids the long single-statement `LOAD DATA` that servers kill mid-flight.
+Tool side: raise `--commit` to cut fsyncs, keep `--workers` at 4–8, leave
+`--load-mode auto` on.
 
-Measured on a 62 GB / NVMe lab host (Docker-hosted databases, 20M-row dataset):
+Measured on a 62 GB / NVMe host with a 20M-row dataset:
 
 | Direction | Throughput |
 |---|---|
@@ -185,37 +121,21 @@ Measured on a 62 GB / NVMe lab host (Docker-hosted databases, 20M-row dataset):
 | pg → pg | 150 MB/s |
 | mssql → pg | 187 MB/s |
 | mysql → mssql | 25 MB/s |
-| * → oracle | 3.5–4.3 MB/s |
+| \* → oracle | 3.5–4.3 MB/s |
 
-The Oracle target is the outlier: it loads row by row. If Oracle is your target,
-budget accordingly or enable `sqlldr`.
+Oracle targets load row by row and are the bottleneck of the matrix; budget time
+or enable `sqlldr`.
 
-### Metrics the dashboard reports
+## Documentation
 
-- throughput (MB/s) and rows/s
-- read and write amplification (container block-device bytes ÷ payload)
-- peak RSS (VmHWM) and target database memory
-- per-table progress, error counters, ETA
-
-## Verification
-
-```bash
-./build/migrator --mode mysql2pg ... --verify-engine fnv        # checksum
-./build/migrator --mode mysql2pg ... --verify-async             # after load
-```
-
-Verification compares row counts and a normalized digest of every column, so
-type differences (DECIMAL vs NUMERIC, DATETIME vs TIMESTAMP) do not produce
-false mismatches.
-
-## CDC
-
-```bash
-./build/migrator --mode mysql2pg ... --cdc --cdc-drop-slot
-```
-
-MySQL requires `binlog_format=ROW`; PostgreSQL needs `wal_level=logical`.
-`--cdc-drop-slot` removes the replication slot when the tool stops.
+| Document | Contents |
+|---|---|
+| [docs/usage.md](docs/usage.md) | full parameter reference and recipes |
+| [docs/dependencies.md](docs/dependencies.md) | drivers, bulk loaders, installation |
+| [docs/operations.md](docs/operations.md) | dashboard, logging, audit |
+| [docs/adapters-mssql-oracle.md](docs/adapters-mssql-oracle.md) | SQL Server / Oracle specifics |
+| [INSTALL.md](packaging/portable/INSTALL.md) | portable package and troubleshooting |
+| [docs/README.md](docs/README.md) | documentation index |
 
 ## Troubleshooting
 
@@ -223,27 +143,23 @@ MySQL requires `binlog_format=ROW`; PostgreSQL needs `wal_level=logical`.
 |---|---|
 | `Lost connection to MySQL server during query` | raise `net_read_timeout`/`net_write_timeout`, keep `--load-mode auto` |
 | `Can't open lib 'ODBC Driver 18 for SQL Server'` | install `msodbcsql18`, register it in `odbcinst.ini` |
-| `ORA-12541: no listener` | check port and listener |
-| `ORA-01017: invalid credential` | password with special characters — use `password=file:PATH` |
-| `ORA-12954: exceeds the maximum allowed database size` | PDB hit its `MAXSIZE`; recreate with `STORAGE (MAXSIZE 64G)` |
+| `ORA-12541` | check port and listener |
+| `ORA-01017` | password with special characters — use `password=file:PATH` |
+| `ORA-12954` | PDB hit `MAXSIZE`; recreate with `STORAGE (MAXSIZE 64G)` |
 | verification timeout on huge tables | use `--verify-async` |
 | `error while loading shared libraries` | host glibc older than the build host |
 
-`./build/migrator doctor` prints a machine-readable environment check.
+## Contributing
 
-## Limitations
-
-- Oracle `BLOB` tables use a two-stage hex path and are slower than plain tables
-- `bcp`/`sqlldr` receive credentials through the command line or a temporary file
-- CDC needs server-side replication configured in advance
-- the dashboard is read-only; module switches are build-time
-- MySQL targets default to `LOAD DATA`; very wide rows switch to INSERT automatically
-
-## Documentation
-
-- [docs/usage.md](docs/usage.md) — full parameter reference
-- [docs/dependencies.md](docs/dependencies.md) — drivers, loaders, troubleshooting
+- Issues: include database versions, `doctor` output and the failing log lines
+- Code changes: `bash -n` the scripts, smoke-test one direction, then run the matrix
+- Packaging: `bash packaging/build-portable.sh 1.0.0`
 
 ## License
 
-See [LICENSE](LICENSE).
+[LICENSE](LICENSE)
+
+## Links
+
+- Repository: https://github.com/bellgrell/Migrator-
+- Issues: https://github.com/bellgrell/Migrator-/issues
